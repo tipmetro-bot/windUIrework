@@ -14,8 +14,23 @@ local WindUI = {
 	ConfigManager = nil,
 	Version = "0.0.0",
 	Animations = require("./modules/Animations"),
+	ReworkLocalization = require("./modules/ReworkLocalization"),
 
 	Services = require("./utils/services/Init"),
+
+	-- Rework: explicit, documented layering. Upstream used -99999 for the
+	-- window and left every other ScreenGui at 0, so dropdowns / popups
+	-- ended up behind (or in front of) the wrong things.
+	DisplayOrders = {
+		Window = 10,
+		Profile = 20,
+		Dropdown = 30,
+		Tooltip = 40,
+		Notification = 50,
+		Popup = 60,
+		KeySystem = 70,
+		Loading = 100,
+	},
 
 	OnThemeChangeFunction = nil,
 
@@ -83,6 +98,7 @@ if Package then
 end
 
 local KeySystem = require("./components/KeySystem")
+local LoadingScreen = require("./components/window/LoadingScreen")
 
 local Creator = WindUI.Creator
 
@@ -96,6 +112,7 @@ local Acrylic = require("./utils/Acrylic/Init")
 local ProtectGui = protectgui or (syn and syn.protect_gui) or function() end
 
 local GUIParent = gethui and gethui() or (CoreGui or LocalPlayer:WaitForChild("PlayerGui"))
+WindUI.GUIParent = GUIParent
 
 local UIScaleObj = New("UIScale", {
 	Scale = WindUI.UIScale,
@@ -108,7 +125,8 @@ WindUI.ScreenGui = New("ScreenGui", {
 	Parent = GUIParent,
 	IgnoreGuiInset = true,
 	ScreenInsets = "None",
-	DisplayOrder = -99999,
+	ZIndexBehavior = "Sibling",
+	DisplayOrder = WindUI.DisplayOrders.Window,
 }, {
 
 	New("Folder", {
@@ -135,16 +153,25 @@ WindUI.NotificationGui = New("ScreenGui", {
 	Name = "WindUI/Notifications",
 	Parent = GUIParent,
 	IgnoreGuiInset = true,
+	ScreenInsets = "None",
+	ZIndexBehavior = "Sibling",
+	DisplayOrder = WindUI.DisplayOrders.Notification,
 })
 WindUI.DropdownGui = New("ScreenGui", {
 	Name = "WindUI/Dropdowns",
 	Parent = GUIParent,
 	IgnoreGuiInset = true,
+	ScreenInsets = "None",
+	ZIndexBehavior = "Sibling",
+	DisplayOrder = WindUI.DisplayOrders.Dropdown,
 })
 WindUI.TooltipGui = New("ScreenGui", {
 	Name = "WindUI/Tooltips",
 	Parent = GUIParent,
 	IgnoreGuiInset = true,
+	ScreenInsets = "None",
+	ZIndexBehavior = "Sibling",
+	DisplayOrder = WindUI.DisplayOrders.Tooltip,
 })
 ProtectGui(WindUI.ScreenGui)
 ProtectGui(WindUI.NotificationGui)
@@ -213,17 +240,26 @@ function WindUI:OnThemeChange(func)
 end
 
 function WindUI:AddTheme(LTheme)
+	if type(LTheme) ~= "table" or not LTheme.Name then
+		return nil
+	end
 	WindUI.Themes[LTheme.Name] = LTheme
+	-- Rework (bug 5): a theme added/replaced at runtime must be applied to
+	-- already-created elements instead of only being stored in the table.
+	if WindUI.CurrentTheme == LTheme.Name or WindUI.Theme == LTheme then
+		Creator.SetTheme(LTheme)
+	end
 	return LTheme
 end
 
 function WindUI:SetTheme(Value)
 	if WindUI.Themes[Value] then
 		WindUI.Theme = WindUI.Themes[Value]
+		WindUI.CurrentTheme = Value -- rework: custom elements read this
 		Creator.SetTheme(WindUI.Themes[Value])
 
 		if WindUI.OnThemeChangeFunction then
-			WindUI.OnThemeChangeFunction(Value)
+			Creator.SafeCallback(WindUI.OnThemeChangeFunction, Value)
 		end
 
 		return WindUI.Themes[Value]
@@ -248,6 +284,10 @@ function WindUI:Localization(LocalizationConfig)
 end
 
 function WindUI:SetLanguage(Value)
+	if WindUI.ReworkLocalization.IsValid(Value) then
+		return WindUI.ReworkLocalization.SetLanguage(WindUI, Value)
+	end
+	-- Any custom language registered by the user still works.
 	if Creator.Localization then
 		return Creator.SetLanguage(Value)
 	end
@@ -323,10 +363,58 @@ WindUI.Themes = require("./themes/Init")(WindUI, Creator)
 Creator.Themes = WindUI.Themes
 
 WindUI:SetTheme("Dark")
-WindUI:SetLanguage(Creator.Language)
+
+-- Rework: RU/EN is built in and can be switched from the profile panel
+-- (or from code with `WindUI:SetLanguage("en")`).
+WindUI.ReworkLocalization.Install(WindUI, nil)
+WindUI:SetLanguage(WindUI.ReworkLocalization.GetLanguage())
+
+function WindUI:GetLanguage()
+	return Creator.Language
+end
+
+function WindUI:OnLanguageChange(callback)
+	return WindUI.ReworkLocalization.OnChange(callback)
+end
+
+function WindUI:SetDisplayOrder(name, value)
+	if WindUI.DisplayOrders[name] == nil or type(value) ~= "number" then
+		return false
+	end
+	WindUI.DisplayOrders[name] = value
+	local gui = ({
+		Window = WindUI.ScreenGui,
+		Dropdown = WindUI.DropdownGui,
+		Tooltip = WindUI.TooltipGui,
+		Notification = WindUI.NotificationGui,
+	})[name]
+	if gui then
+		gui.DisplayOrder = value
+	end
+	return true
+end
+
+function WindUI:SetLoadingEnabled(value)
+	WindUI.LoadingEnabled = value == true
+	if WindUI.LoadingScreen and WindUI.LoadingScreen.SetEnabled then
+		WindUI.LoadingScreen:SetEnabled(WindUI.LoadingEnabled)
+	end
+	return WindUI
+end
 
 function WindUI:CreateWindow(Config)
 	local CreateWindow = require("./components/window/Init")
+
+	-- Rework (bug 2): CreateWindow can be re-entered while the Key System
+	-- dialog is open. Without this guard two windows were created.
+	if WindUI.Window then
+		return WindUI.Window
+	end
+	if WindUI.CreateWindowBusy then
+		warn("[ WindUI ] CreateWindow is already in progress")
+		return WindUI.Window
+	end
+	WindUI.CreateWindowBusy = true
 
 	if not RunService:IsStudio() and writefile then
 		if not isfolder("WindUI") then
@@ -343,17 +431,30 @@ function WindUI:CreateWindow(Config)
 	Config.Window = WindUI.Window
 	Config.Parent = WindUI.ScreenGui.Window
 
-	if WindUI.Window then
-		warn("You cannot create more than one window")
-		return
+	local CanLoadWindow = true
+	local KeySystemCancelled = false
+
+	-- Rework (bug 5): go through the public API so `WindUI.Theme`,
+	-- `WindUI.CurrentTheme` and OnThemeChange stay in sync. Calling
+	-- Creator.SetTheme() directly left GetCurrentTheme() stale.
+	if Config.Theme then
+		WindUI:SetTheme(Config.Theme)
+	else
+		Creator.SetTheme(WindUI.Theme or WindUI.Themes.Dark)
 	end
 
-	local CanLoadWindow = true
-
-	local Theme = WindUI.Themes[Config.Theme or "Dark"]
-
-	--WindUI.Theme = Theme
-	Creator.SetTheme(Theme)
+	-- Rework: language + loading are configurable from code.
+	local Settings = type(Config.Settings) == "table" and Config.Settings or {}
+	local requestedLanguage = Config.Language or Settings.Language
+	if requestedLanguage then
+		WindUI:SetLanguage(requestedLanguage)
+	end
+	local loadingConfig = Config.Loading
+	if loadingConfig == nil then
+		loadingConfig = Settings.Loading
+	end
+	WindUI.LoadingScreen = LoadingScreen.New(WindUI, loadingConfig)
+	WindUI.LoadingEnabled = WindUI.LoadingScreen.Enabled
 
 	local hwid = gethwid or function()
 		return Players.LocalPlayer.UserId
@@ -364,10 +465,24 @@ function WindUI:CreateWindow(Config)
 	if Config.KeySystem then
 		CanLoadWindow = false
 
+		-- Rework (bug 2): one-shot resolution. The upstream callback could
+		-- fire twice, and closing the dialog left the `repeat task.wait()`
+		-- loop spinning forever (a real coroutine/CPU leak).
+		local resolved = false
+		local function resolveKey(success)
+			if resolved then
+				return
+			end
+			resolved = true
+			if success == true then
+				CanLoadWindow = true
+			else
+				KeySystemCancelled = true
+			end
+		end
+
 		local function loadKeysystem()
-			KeySystem.new(Config, Filename, function(c)
-				CanLoadWindow = c
-			end)
+			KeySystem.new(Config, Filename, resolveKey)
 		end
 
 		local keyPath = (Config.Folder or "Temp") .. "/" .. Filename .. ".key"
@@ -378,7 +493,7 @@ function WindUI:CreateWindow(Config)
 				local isValid = Config.KeySystem.KeyValidator(savedKey)
 
 				if isValid then
-					CanLoadWindow = true
+					resolveKey(true)
 				else
 					loadKeysystem()
 				end
@@ -392,7 +507,7 @@ function WindUI:CreateWindow(Config)
 					or tostring(Config.KeySystem.Key) == tostring(savedKey)
 
 				if isKey then
-					CanLoadWindow = true
+					resolveKey(true)
 				else
 					loadKeysystem()
 				end
@@ -421,7 +536,7 @@ function WindUI:CreateWindow(Config)
 					end
 				end
 
-				CanLoadWindow = isSuccess
+				if isSuccess then resolveKey(true) else loadKeysystem() end
 				if not isSuccess then
 					loadKeysystem()
 				end
@@ -430,13 +545,35 @@ function WindUI:CreateWindow(Config)
 			end
 		end
 
+		-- Bounded wait: yields a frame at a time (no busy spin) and always
+		-- terminates, even if the dialog is closed without a key.
+		local frames = 0
 		repeat
 			task.wait()
-		until CanLoadWindow
+			frames += 1
+		until CanLoadWindow or KeySystemCancelled or frames > 900
+
+		if not CanLoadWindow then
+			WindUI.CreateWindowBusy = false
+			if WindUI.LoadingScreen then
+				WindUI.LoadingScreen:Destroy()
+			end
+			return nil
+		end
 	end
 
 	local Window = CreateWindow(Config)
+	WindUI.CreateWindowBusy = false
 
+	if not Window then
+		if WindUI.LoadingScreen then
+			WindUI.LoadingScreen:Destroy()
+		end
+		return nil
+	end
+
+	Window.LoadingScreen = WindUI.LoadingScreen
+	Window.Settings = Settings
 	WindUI.Transparent = Config.Transparent
 	WindUI.Window = Window
 

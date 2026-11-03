@@ -36,7 +36,9 @@
 | 5 | **Панель профиля** | Не было | Neverlose‑подобный попап в нижнем левом углу поверх профиля: секции «Комбат» (Сайлент аим, Аимбот, Триггербот, Kill All) и «Визуалы» (ESP, ESP Box, ESP Skeleton), сохранение через ConfigManager |
 | 6 | **ConfigManager** | `CreateConfig(nil)` падал до проверки; сохранение `0` у слайдера терялось | Проверка имени до конкатенации, корректные `Save/Load` для нулевых значений, повторное использование уже созданного конфига |
 | 7 | **Сборка** | Нужен `darklua` (Rust) + Rojo + сабмодуль иконок | `python3 tools/bundle.py` собирает `dist/main.lua` без внешних бинарников; иконки завендорены в `src/Icons/` |
-| 8 | **Документация / тесты** | README на 20 строк | Этот README, пример `examples/rework_example.client.lua`, регрессионные тесты `tests/slider_math_test.luau` (38 проверок), CI‑проверка синтаксиса и свежести бандла |
+| 8 | **Документация / тесты** | README на 20 строк | Этот README, пример `examples/rework_example.client.lua`, регрессионные тесты `tests/slider_math_test.luau` (47 проверок), smoke‑тест бандла с моками Roblox, CI‑проверка синтаксиса |
+| 9 | **8 багов из чек-листа** | ConfigManager терял Dropdown/Colorpicker и дёргал колбэки при загрузке; Key System создавал окно дважды и тек connections; Dropdown не закрывался по клику вне и не обновлял Options; `Locked`‑слайдер драгался; темы не подхватывали новые ключи; drag игнорировал `GuiInset`; дропдауны уходили под окно; `DisconnectAll` не отключал половину соединений | Всё исправлено: тихий `Load`, `RegisterAll`, `Color3.fromHex("#…")`, `SetValues`, `Input.Position` вместо `Mouse.X/Y`, `Active = false`, `DisplayOrders`, `DisconnectGroup` и `Creator.SuspendCallbacks` |
+| 10 | **Язык, темы, Key System, загрузка** | Не было | Секция «Настройки» в панели профиля: RU/EN и Dark/Light переключаются кликом; нижние кнопки Get Key / Check Key; настраиваемый из кода экран загрузки (`Loading = false`/`true`/таблица) |
 
 ---
 
@@ -319,6 +321,46 @@ Panel:SetTitle("Player")  Panel:SetSubtitle("config: default")
 
 ---
 
+## Настройки прямо в панели профиля (RU/EN, тема, загрузка)
+
+В панели профиля автоматически появляется секция **«Настройки / Settings»** — всё переключается кликом, без правки кода:
+
+| Строка | Что делает |
+|---|---|
+| **Язык / Language** | `RU ↔ EN` — переключается вся библиотека (`WindUI:SetLanguage`), включая подписи панели, Key System и экрана загрузки |
+| **Тема оформления** | `Dark ↔ Light` — `WindUI:SetTheme` применяется к уже созданным элементам |
+| **Экран загрузки** | вкл/выкл оверлея загрузки |
+| **Загружать настройки** | вкл/выкл `AutoLoad` у ConfigManager |
+
+Отключить секцию можно `Settings = false` в `CreateWindow`. Из кода те же вещи настраиваются так:
+
+```lua
+local Window = WindUI:CreateWindow({
+    Title = "My Hub",
+    Theme = "Dark",                       -- стартовая тема
+    Language = "ru",                      -- "ru" | "en"
+    Settings = { Language = "ru" },       -- секция настроек в панели
+    Loading = {                           -- или Loading = true / false
+        Enabled  = true,                  -- надо ли показывать загрузку
+        Duration = 1.2,                   -- секунды; 0 = скрывать вручную
+        Title    = "My Hub",
+        Steps    = { "Конфиг…", "Вкладки…", "Готово" },
+    },
+    KeySystem = {
+        Title = "My Hub",
+        URL   = "https://example.com/key",
+        Key   = { "ABC-123" },
+        SaveKey = true,
+    },
+})
+```
+
+`Loading = false` (по умолчанию) не создаёт вообще ни одного GUI и не вешает соединений. `WindUI:SetLoadingEnabled(bool)` и `Panel:SetValue("ReworkLoading", bool)` переключают оверлей на лету.
+
+**Key System** теперь всегда имеет две нижние кнопки — **Get Key** и **Check Key** (плюс «Выход»), локализованные вместе с интерфейсом. Закрытие диалога больше не оставляет скрипт в бесконечном `repeat task.wait()`, а все соединения диалога отключаются при завершении.
+
+---
+
 ## ConfigManager / сохранение настроек
 
 ```lua
@@ -347,7 +389,8 @@ print(Window.ConfigManager:AllConfigs())
 |---|---|
 | `WindUI:CreateWindow(config)` | Создать окно (только одно) |
 | `WindUI:SetTheme(name)` / `:GetThemes()` / `:GetCurrentTheme()` | Темы: Dark, Light, Rose, … |
-| `WindUI:SetFont(id)` / `:Localization(cfg)` / `:SetLanguage(code)` | Шрифт и локализация |
+| `WindUI:SetFont(id)` / `:Localization(cfg)` / `:SetLanguage(code)` / `:GetLanguage()` / `:OnLanguageChange(fn)` | Шрифт и локализация RU/EN |
+| `WindUI:SetLoadingEnabled(bool)` / `:SetDisplayOrder(name, value)` | Экран загрузки и порядок ScreenGui |
 | `WindUI:Notify(cfg)` / `:Popup(cfg)` / `:Gradient(stops)` | Уведомления, попапы, градиенты |
 | `WindUI:SetAnimationProfile(name)` / `:GetAnimationProfile()` | Профиль анимаций |
 | `WindUI:SetAnimationsEnabled(bool)` / `:SetAnimationSpeed(x)` | Доступность / скорость |
@@ -362,7 +405,9 @@ print(Window.ConfigManager:AllConfigs())
 | `:Open()`, `:Close()`, `:Toggle()`, `:Destroy()` | Состояние окна |
 | `:OnOpen(fn)`, `:OnClose(fn)`, `:OnDestroy(fn)` | Хуки |
 | `:SetToggleKey(key)`, `:SetOpenButtonEnabled(bool)`, `:SetOpenButtonVisible(bool)`, `:EditOpenButton(cfg)` | Управление кнопкой |
-| `:Profile(cfg)` | Panel профиля (синглтон на окно) |
+| `:Profile(cfg)` | Панель профиля (синглтон на окно) |
+| `Window.OpenButtonMain:SetOpenState(closed)` / `:IsWindowOpen()` | Явное состояние open/close кнопки |
+| `Window.Settings`, `Window.LoadingScreen` | Настройки и оверлей загрузки |
 | `:SetTitle`, `:SetAuthor`, `:SetIconSize`, `:SetSize`, `:SetUIScale`, `:SetToTheCenter`, `:ToggleFullscreen` | Окно |
 | `:ToggleTransparency`, `:LockAll`, `:UnlockAll`, `:GetLocked`, `:GetUnlocked` | Прочее |
 | `:SetAnimationProfile(name)`, `:SetAnimationsEnabled(bool)` | Прокси к `WindUI` |
@@ -391,7 +436,7 @@ npm test                            # smoke-тест бандла + тесты �
 
 ```bash
 luau-compile --null dist/main.lua
-luau tests/slider_math_test.luau    # 38 проверок на нули -> "ALL OK"
+luau tests/slider_math_test.luau    # 47 проверок на нули и Step -> "ALL OK"
 LUAU_BIN=luau python3 tools/smoke_test.py
 ```
 
@@ -437,13 +482,15 @@ windUIrework/
 │   ├── components/window/
 │   │   ├── Init.lua                ← платформа, open/close, Profile API
 │   │   ├── Openbutton.lua          ← ПЕРЕПИСАН
-│   │   └── ProfilePanel.lua        ← НОВЫЙ
+│   │   ├── ProfilePanel.lua        ← НОВЫЙ (+ секция «Настройки»)
+│   │   └── LoadingScreen.lua       ← НОВЫЙ (оверлей загрузки)
 │   ├── components/… , elements/… , themes/… , utils/…
 │   ├── config/Init.lua             ← ConfigManager (фиксы 0)
 │   ├── elements/Slider.lua         ← ПЕРЕПИСАН
 │   ├── modules/
 │   │   ├── Animations.lua          ← НОВЫЙ
 │   │   ├── SliderMath.lua         ← НОВЫЙ (чистая математика)
+│   │   ├── ReworkLocalization.lua  ← НОВЫЙ (RU/EN)
 │   │   └── Creator.lua, Icons.lua, …
 │   └── Icons/                       ← завендоренный сабмодуль иконок
 └── main*.lua, example-structure.json, sourcemap.json  ← примеры оригинала

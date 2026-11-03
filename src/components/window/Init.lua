@@ -1273,8 +1273,16 @@ return function(Config)
 		if Window.ProfilePanel then
 			return Window.ProfilePanel
 		end
-		Window.ProfilePanel = ProfilePanel.New(Window, ProfileConfig or {}, Config.WindUI)
-		return Window.ProfilePanel
+		local Panel = ProfilePanel.New(Window, ProfileConfig or {}, Config.WindUI)
+		Window.ProfilePanel = Panel
+		-- Rework: RU/EN + Dark/Light + loading toggles live in the panel.
+		-- Set `Settings = false` in CreateWindow to hide that section.
+		if Config.Settings ~= false and Panel.AddSettings then
+			pcall(function()
+				Panel:AddSettings()
+			end)
+		end
+		return Panel
 	end
 
 	function Window:SetTitle(text)
@@ -1439,6 +1447,13 @@ return function(Config)
 		if Window.Destroyed then
 			return
 		end
+		-- Rework: state must change IMMEDIATELY, not after `task.wait(0.06)`.
+		-- Otherwise clicking the open button twice (or tapping fast on a
+		-- phone) toggled the window twice and it ended up closed again.
+		Window.Closed = false
+		if Window.OpenButtonMain and Window.OpenButtonMain.SetOpenState then
+			Window.OpenButtonMain:SetOpenState(false)
+		end
 		task.spawn(function()
 			if Window.OnOpenCallback then
 				task.spawn(function()
@@ -1447,7 +1462,6 @@ return function(Config)
 			end
 
 			task.wait(0.06)
-			Window.Closed = false
 
 			Window.UIElements.Main.Size = UDim2.new(Window.Size.X.Scale, Window.Size.X.Offset, 0, 100)
 			if Window.UIElements.ReworkScale then
@@ -1565,6 +1579,9 @@ return function(Config)
 
 		Window.CanDropdown = false
 		Window.Closed = true
+		if Window.OpenButtonMain and Window.OpenButtonMain.SetOpenState then
+			Window.OpenButtonMain:SetOpenState(true)
+		end
 
 		Animations:Play(Window.UIElements.Main, "Close", {
 			Size = UDim2.new(Window.Size.X.Scale, Window.Size.X.Offset, 0, 0),
@@ -1652,6 +1669,19 @@ return function(Config)
 				Window.Destroyed = true
 
 				task.wait(0.4)
+
+				-- Rework (bug 8): release drag connections before the guis
+				-- disappear, then disconnect every remaining signal.
+				if WindowDragModule and WindowDragModule.Destroy then
+					pcall(function()
+						WindowDragModule:Destroy()
+					end)
+				end
+				if Config.WindUI and Config.WindUI.LoadingScreen then
+					pcall(function()
+						Config.WindUI.LoadingScreen:Destroy()
+					end)
+				end
 
 				Config.WindUI.ScreenGui:Destroy()
 				Config.WindUI.NotificationGui:Destroy()
@@ -1822,11 +1852,12 @@ return function(Config)
 		Window:EditOpenButton(Window.OpenButton)
 	end
 
-	-- `Window.Profile = {...}` in CreateWindow builds the panel automatically.
-	if Window.ProfileConfig and typeof(Window.ProfileConfig) == "table" then
+	-- `Window.Profile = {...}` (or `Settings = {...}`) builds the panel.
+	local wantsSettings = Config.Settings ~= nil and Config.Settings ~= false
+	if (Window.ProfileConfig and typeof(Window.ProfileConfig) == "table") or wantsSettings then
 		task.defer(function()
 			if not Window.Destroyed and not Window.ProfilePanel then
-				Window:Profile(Window.ProfileConfig)
+				Window:Profile(Window.ProfileConfig or {})
 			end
 		end)
 	end

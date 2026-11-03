@@ -41,6 +41,7 @@ local Players = cloneref(game:GetService("Players"))
 
 local Creator = require("../../modules/Creator")
 local Animations = require("../../modules/Animations")
+local Localization = require("../../modules/ReworkLocalization")
 local New = Creator.New
 
 local ProfilePanel = {}
@@ -53,21 +54,23 @@ local ACCENT = Color3.fromHex("0091FF")
 local DEFAULT_SECTIONS = {
 	{
 		Title = "Комбат",
+		TitleKey = "combat",
 		Icon = "crosshair",
 		Items = {
-			{ Title = "Сайлент аим", Flag = "SilentAim", Default = false },
-			{ Title = "Аимбот", Flag = "Aimbot", Default = false },
-			{ Title = "Триггербот", Flag = "TriggerBot", Default = false },
-			{ Title = "Kill All", Flag = "KillAll", Type = "Button" },
+			{ Title = "Сайлент аим", Flag = "SilentAim", TitleKey = "silentaim", Default = false },
+			{ Title = "Аимбот", Flag = "Aimbot", TitleKey = "aimbot", Default = false },
+			{ Title = "Триггербот", Flag = "TriggerBot", TitleKey = "triggerbot", Default = false },
+			{ Title = "Kill All", Flag = "KillAll", TitleKey = "killall", Type = "Button" },
 		},
 	},
 	{
 		Title = "Визуалы",
+		TitleKey = "visuals",
 		Icon = "eye",
 		Items = {
-			{ Title = "ESP", Flag = "ESP", Default = false },
-			{ Title = "ESP Box", Flag = "ESPBox", Default = false },
-			{ Title = "ESP Skeleton", Flag = "ESPSkeleton", Default = false },
+			{ Title = "ESP", Flag = "ESP", TitleKey = "esp", Default = false },
+			{ Title = "ESP Box", Flag = "ESPBox", TitleKey = "espbox", Default = false },
+			{ Title = "ESP Skeleton", Flag = "ESPSkeleton", TitleKey = "espskeleton", Default = false },
 		},
 	},
 }
@@ -88,6 +91,34 @@ local function NormaliseBoolean(value, fallback)
 		end
 	end
 	return fallback == true
+end
+
+-- Rework: "Choice" rows are a compact two/three-state selector used for
+-- the RU/EN language switch and the Dark/Light theme switch.
+local function NormaliseOptions(options)
+	local result = {}
+	for _, option in ipairs(options or {}) do
+		if typeof(option) == "table" then
+			result[#result + 1] = {
+				Value = option.Value ~= nil and option.Value or (option.Label or option[1]),
+				Label = option.Label,
+				LabelKey = option.LabelKey,
+			}
+		else
+			result[#result + 1] = { Value = option, Label = tostring(option) }
+		end
+	end
+	return result
+end
+
+local function OptionLabel(option, language)
+	if not option then
+		return ""
+	end
+	if option.LabelKey then
+		return Localization.Get(option.LabelKey, language)
+	end
+	return tostring(option.Label ~= nil and option.Label or option.Value)
 end
 
 local function CopySections(sections)
@@ -317,7 +348,7 @@ function ProfilePanel.New(Window, Config, WindUI)
 		Parent = Header,
 		Position = UDim2.new(0, 58, 0, 31),
 		Size = UDim2.new(1, -110, 0, 16),
-		Text = Config.Subtitle or "Настройки профиля",
+		Text = Config.Subtitle or Localization.Key("profile.subtitle"),
 		TextSize = 12,
 		TextTransparency = 0.45,
 		TextXAlignment = "Left",
@@ -566,6 +597,8 @@ function ProfilePanel.New(Window, Config, WindUI)
 	------------------------------------------------------------------
 	local function CreateItem(Section, ItemConfig)
 		local ItemType = ItemConfig.Type or "Toggle"
+		local IsChoice = ItemType == "Choice"
+		local Options = NormaliseOptions(ItemConfig.Options)
 		local Row = New("TextButton", {
 			Name = "Row",
 			Parent = Section.Content,
@@ -591,7 +624,8 @@ function ProfilePanel.New(Window, Config, WindUI)
 			Parent = Row,
 			Size = UDim2.new(1, -62, 1, 0),
 			Position = UDim2.new(0, 12, 0, 0),
-			Text = ItemConfig.Title or "Item",
+			Text = ItemConfig.TitleKey and Localization.Key(ItemConfig.TitleKey)
+				or (ItemConfig.Title or "Item"),
 			TextSize = 13,
 			TextXAlignment = "Left",
 			TextTruncate = "AtEnd",
@@ -601,8 +635,25 @@ function ProfilePanel.New(Window, Config, WindUI)
 			ThemeTag = { TextColor3 = "Text" },
 		})
 
-		local Pill, Knob, Arrow
-		if ItemType == "Button" then
+		local Pill, Knob, Arrow, ValueLabel
+		if IsChoice then
+			ValueLabel = New("TextLabel", {
+				Name = "Value",
+				Parent = Row,
+				Size = UDim2.new(0, 96, 1, 0),
+				Position = UDim2.new(1, -12, 0, 0),
+				AnchorPoint = Vector2.new(1, 0),
+				Text = "",
+				TextSize = 12,
+				TextXAlignment = "Right",
+				TextTruncate = "AtEnd",
+				TextTransparency = 0.15,
+				BackgroundTransparency = 1,
+				ZIndex = 205,
+				ThemeTag = { TextColor3 = "Icon" },
+			})
+			Label.Size = UDim2.new(1, -120, 1, 0)
+		elseif ItemType == "Button" then
 			Arrow = New("TextLabel", {
 				Name = "Arrow",
 				Parent = Row,
@@ -642,11 +693,15 @@ function ProfilePanel.New(Window, Config, WindUI)
 		end
 
 		local Item = {
-			__type = ItemType == "Button" and "Button" or "Toggle",
+			__type = IsChoice and "Choice" or (ItemType == "Button" and "Button" or "Toggle"),
 			Type = ItemType,
 			Title = ItemConfig.Title or "Item",
+			TitleKey = ItemConfig.TitleKey,
 			Flag = ItemConfig.Flag,
-			Value = NormaliseBoolean(ItemConfig.Default, false),
+			Options = Options,
+			Value = IsChoice
+				and (ItemConfig.Default ~= nil and ItemConfig.Default or (Options[1] and Options[1].Value))
+				or NormaliseBoolean(ItemConfig.Default, false),
 			Callback = ItemConfig.Callback,
 			UIElements = {
 				Row = Row,
@@ -655,6 +710,7 @@ function ProfilePanel.New(Window, Config, WindUI)
 				Pill = Pill,
 				Knob = Knob,
 				Arrow = Arrow,
+				ValueLabel = ValueLabel,
 			},
 		}
 
@@ -673,7 +729,18 @@ function ProfilePanel.New(Window, Config, WindUI)
 					Animations:Play(Row, "Hover", { Size = UDim2.new(1, 0, 0, 34) }, "Pop", "Out")
 				end
 			end)
-			if ItemType == "Button" then
+			if IsChoice then
+				local index = 1
+				for i, option in ipairs(Options) do
+					if option.Value == Item.Value then
+						index = i
+						break
+					end
+				end
+				if #Options > 0 then
+					Item:Set(Options[(index % #Options) + 1].Value, true)
+				end
+			elseif ItemType == "Button" then
 				Creator.SafeCallback(Item.Callback, true)
 			else
 				Item:Set(not Item.Value, true)
@@ -694,6 +761,27 @@ function ProfilePanel.New(Window, Config, WindUI)
 			if Item.Type == "Button" then
 				if fireCallback ~= false then
 					Creator.SafeCallback(Item.Callback, true)
+				end
+				return Item
+			end
+			if IsChoice then
+				local index = 1
+				for i, option in ipairs(Options) do
+					if option.Value == value then
+						index = i
+						break
+					end
+				end
+				local option = Options[index]
+				if option then
+					Item.Value = option.Value
+					ValueLabel.Text = OptionLabel(option, Localization.GetLanguage())
+				end
+				if Item.Flag then
+					Panel.Values[Item.Flag] = Item.Value
+				end
+				if fireCallback ~= false then
+					Creator.SafeCallback(Item.Callback, Item.Value)
 				end
 				return Item
 			end
@@ -747,6 +835,7 @@ function ProfilePanel.New(Window, Config, WindUI)
 
 		local Section = {
 			Title = SectionConfig.Title or "Раздел",
+			TitleKey = SectionConfig.TitleKey,
 			Expanded = SectionConfig.Expanded ~= false,
 			ContentHeight = 0,
 			Items = {},
@@ -792,7 +881,8 @@ function ProfilePanel.New(Window, Config, WindUI)
 				Name = "Title",
 				Size = UDim2.new(1, -44, 1, 0),
 				Position = UDim2.new(0, 14, 0, 0),
-				Text = string.upper(Section.Title),
+				Text = Section.TitleKey and Localization.Key(Section.TitleKey)
+					or string.upper(Section.Title),
 				TextSize = 12,
 				TextXAlignment = "Left",
 				TextTransparency = 0.2,
@@ -905,6 +995,132 @@ function ProfilePanel.New(Window, Config, WindUI)
 
 		self.Sections[#self.Sections + 1] = Section
 		return Section
+	end
+
+	------------------------------------------------------------------
+	-- Built-in settings (language, theme, loading, config autoload)
+	-- Everything here is clickable in the UI: no code editing required.
+	------------------------------------------------------------------
+	function self:AddSettings()
+		if self.SettingsAdded then
+			return self.SettingsSection
+		end
+		self.SettingsAdded = true
+
+		local WindUI = self.WindUI
+		local Section = self:AddSection({
+			Title = Localization.Get("settings"),
+			TitleKey = "settings",
+			Icon = "settings",
+			Expanded = true,
+		})
+
+		Section:AddItem({
+			Type = "Choice",
+			Title = Localization.Get("language"),
+			TitleKey = "language",
+			Flag = "ReworkLanguage",
+			Options = {
+				{ Value = "ru", LabelKey = "language.ru" },
+				{ Value = "en", LabelKey = "language.en" },
+			},
+			Default = Localization.GetLanguage(),
+			Callback = function(value)
+				Localization.SetLanguage(WindUI, value)
+			end,
+		})
+
+		Section:AddItem({
+			Type = "Choice",
+			Title = Localization.Get("theme"),
+			TitleKey = "theme",
+			Flag = "ReworkTheme",
+			Options = {
+				{ Value = "Dark", LabelKey = "theme.dark" },
+				{ Value = "Light", LabelKey = "theme.light" },
+			},
+			Default = (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()) or "Dark",
+			Callback = function(value)
+				if WindUI.SetTheme then
+					WindUI:SetTheme(value)
+				end
+			end,
+		})
+
+		Section:AddItem({
+			Type = "Toggle",
+			Title = Localization.Get("loading"),
+			TitleKey = "loading",
+			Flag = "ReworkLoading",
+			Default = WindUI.LoadingEnabled == true,
+			Callback = function(value)
+				if WindUI.SetLoadingEnabled then
+					WindUI:SetLoadingEnabled(value)
+				end
+				if Window.Settings then
+					Window.Settings.Loading = value
+				end
+			end,
+		})
+
+		Section:AddItem({
+			Type = "Toggle",
+			Title = Localization.Get("autoload"),
+			TitleKey = "autoload",
+			Flag = "ReworkAutoLoad",
+			Default = Config.AutoLoad ~= false,
+			Callback = function(value)
+				Config.AutoLoad = value == true
+				if self.ConfigModule and self.ConfigModule.SetAutoLoad then
+					pcall(function()
+						self.ConfigModule:SetAutoLoad(value)
+					end)
+				end
+			end,
+		})
+
+		self.SettingsSection = Section
+		return Section
+	end
+
+	function self:RefreshLanguage(language)
+		local lang = language or Localization.GetLanguage()
+		for _, section in ipairs(self.Sections) do
+			if section.TitleKey then
+				section.Title = Localization.Get(section.TitleKey, lang)
+			end
+		end
+		for _, item in ipairs(self.Items) do
+			if item.Type == "Choice" then
+				item:Set(item.Value, false)
+			end
+		end
+		return self
+	end
+
+	self.LanguageUnsubscribe = Localization.OnChange(function(language)
+		if not self.Destroyed then
+			self:RefreshLanguage(language)
+		end
+	end)
+
+	-- Public convenience API (the UI rows call these too).
+	function self:SetLanguage(language)
+		return Localization.SetLanguage(self.WindUI, language)
+	end
+
+	function self:SetTheme(name)
+		if self.WindUI.SetTheme then
+			self.WindUI:SetTheme(name)
+		end
+		return self
+	end
+
+	function self:SetLoadingEnabled(value)
+		if self.WindUI.SetLoadingEnabled then
+			self.WindUI:SetLoadingEnabled(value)
+		end
+		return self
 	end
 
 	------------------------------------------------------------------
@@ -1060,6 +1276,10 @@ function ProfilePanel.New(Window, Config, WindUI)
 		end
 		self.Destroyed = true
 		self.Opened = false
+		if self.LanguageUnsubscribe then
+			pcall(self.LanguageUnsubscribe)
+			self.LanguageUnsubscribe = nil
+		end
 		if self.StaggerHandle then
 			self.StaggerHandle:Cancel()
 		end

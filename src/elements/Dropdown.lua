@@ -93,6 +93,7 @@ function Element:New(Config)
 	Dropdown.Display = Dropdown.DropdownMenu.Display
 	Dropdown.Refresh = Dropdown.DropdownMenu.Refresh
 	Dropdown.Select = Dropdown.DropdownMenu.Select
+	Dropdown.SetValues = Dropdown.DropdownMenu.SetValues
 	Dropdown.Open = Dropdown.DropdownMenu.Open
 	Dropdown.Close = Dropdown.DropdownMenu.Close
 
@@ -121,6 +122,27 @@ function Element:New(Config)
 	function Dropdown:Unlock()
 		Dropdown.Locked = false
 		return Dropdown.DropdownFrame:Unlock()
+	end
+
+	-- Rework (bug 3/8): replace options at runtime and release connections.
+	function Dropdown:SetValues(Values)
+		if Dropdown.DropdownMenu.SetValues then
+			Dropdown.DropdownMenu:SetValues(Values, true)
+		end
+		return Dropdown
+	end
+
+	function Dropdown:Destroy()
+		if Dropdown.DropdownMenu.Destroy then
+			pcall(function()
+				Dropdown.DropdownMenu:Destroy()
+			end)
+		end
+		if Dropdown.DropdownFrame and Dropdown.DropdownFrame.Destroy then
+			pcall(function()
+				Dropdown.DropdownFrame:Destroy()
+			end)
+		end
 	end
 
 	if Dropdown.Locked then

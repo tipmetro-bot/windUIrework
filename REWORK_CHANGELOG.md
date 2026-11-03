@@ -43,13 +43,32 @@
 - `.gitignore` больше не игнорирует `src/server/`, `sourcemap.json`, `.env.example`.
 - Удалены upstream‑воркфлоу, завязанные на darklua/aftman/сабмодули (`pull_request.yml`, `release.yml`, `comment-pr.yml`).
 
+## Второй проход: чек-лист багов + настройки в UI
+
+### Исправления по списку (8 пунктов)
+1. **ConfigManager / флаги** — `Dropdown.Save` читает живое `Value`, `Colorpicker.Load` добавляет `#` к hex (раньше `Color3.fromHex` всегда падал), `RegisterAll()` подхватывает флаги, заданные после создания элемента, `ConfigModule:Load()` применяет значения синхронно внутри `Creator.SuspendCallbacks` — колбэки больше не срабатывают повторно. Добавлен парсер `Choice`.
+2. **Key System** — guard `WindUI.CreateWindowBusy` не даёт создать окно дважды, ожидание ограничено по кадрам и завершается при нажатии «Выход», все соединения диалога отключаются в `Finish()`, запись ключа защищена `pcall`.
+3. **Dropdown / MultiDropdown** — новый `:SetValues()` обновляет список на лету, `Refresh(Values, silent)` не дёргает колбэк, клик вне списка считается по `Input.Position` (вместо `Mouse.X/Y`, который не учитывал `GuiInset` на телефонах), `ZIndex` меню = 9999.
+4. **Slider** — при `Locked` выставляется `Active = false` на всех хит-поверхностях и `TextEditable = false`; `SliderMath.Format` округляет до точности `Min/Max/Step`, а не всегда до `%.2f`.
+5. **Темы** — `CreateWindow` теперь идёт через `WindUI:SetTheme` (синхронизирует `WindUI.CurrentTheme`), `AddTheme` сразу применяет тему, в `themes/Fallbacks.lua` добавлены недостающие ключи (`Layer`, `Acrylic*`, `PlaceholderText`, `WindowShadowTransparency`).
+6. **Resize / Drag** — `Creator.Drag` учитывает `GuiService:GetGuiInset()`, клампит позицию к вьюпорту и умеет `:Destroy()`.
+7. **ZIndex / ScreenGui** — явная таблица `WindUI.DisplayOrders` (Window 10 → Loading 100), `ZIndexBehavior = "Sibling"` на всех ScreenGui, API `WindUI:SetDisplayOrder(name, value)`.
+8. **Connections** — `Creator.DisconnectAll` переписан (старый цикл с `table.remove` пропускал половину), добавлены `AddScopedSignal` / `DisconnectGroup`; слайдер, дропдаун и диалог ключа освобождают свои соединения при Destroy.
+
+### Новые возможности
+- `src/modules/ReworkLocalization.lua` — встроенный словарь RU/EN, интегрирован в штатный `WindUI:Localization` / `:SetLanguage`; `WindUI:GetLanguage()`, `:OnLanguageChange(fn)`.
+- Секция **«Настройки»** в панели профиля: `Язык RU/EN`, `Тема Dark/Light`, `Экран загрузки`, `Загружать настройки` — новый тип строк `Choice`. Всё кликается в UI, `Settings = false` скрывает секцию.
+- `src/components/window/LoadingScreen.lua` — настраиваемый оверлей (`Loading = false | true | { Enabled, Duration, Title, Steps, AutoHide }`), `WindUI:SetLoadingEnabled(bool)`, переключатель в настройках.
+- Key System: нижние кнопки **Get Key** / **Check Key** (локализованные), «Выход» корректно отменяет создание окна.
+- Open/close кнопка: `Window.Closed` меняется мгновенно (быстро двойной тап больше не открывает окно дважды), `SetOpenState()` показывает «Открыть/Закрыть», повторный `Visible(true)` не переигрывает анимацию.
+
 ## Проверено
 
 ```
 luau-compile --null --only-parse <все Luau-файлы>    OK
 luau-compile --null dist/main.lua                    OK
-luau tests/slider_math_test.luau                    38 checks, 0 failures
-python3 tools/smoke_test.py                         bundle + window + sliders + profile: ALL OK
-node tools/check_syntax.mjs                         89 Luau files parsed OK
+luau tests/slider_math_test.luau                    47 checks, 0 failures
+python3 tools/smoke_test.py                         bundle + settings RU/EN + themes + loading + guards: ALL OK
+node tools/check_syntax.mjs                         90 Luau files parsed OK
 python3 tools/bundle.py --check                      up to date
 ```

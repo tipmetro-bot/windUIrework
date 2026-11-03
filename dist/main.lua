@@ -65,8 +65,23 @@ local WindUI = {
 	ConfigManager = nil,
 	Version = "0.0.0",
 	Animations = __WINDUI_REQUIRE("src/modules/Animations.lua"),
+	ReworkLocalization = __WINDUI_REQUIRE("src/modules/ReworkLocalization.lua"),
 
 	Services = __WINDUI_REQUIRE("src/utils/services/Init.lua"),
+
+	-- Rework: explicit, documented layering. Upstream used -99999 for the
+	-- window and left every other ScreenGui at 0, so dropdowns / popups
+	-- ended up behind (or in front of) the wrong things.
+	DisplayOrders = {
+		Window = 10,
+		Profile = 20,
+		Dropdown = 30,
+		Tooltip = 40,
+		Notification = 50,
+		Popup = 60,
+		KeySystem = 70,
+		Loading = 100,
+	},
 
 	OnThemeChangeFunction = nil,
 
@@ -134,6 +149,7 @@ if Package then
 end
 
 local KeySystem = __WINDUI_REQUIRE("src/components/KeySystem.lua")
+local LoadingScreen = __WINDUI_REQUIRE("src/components/window/LoadingScreen.lua")
 
 local Creator = WindUI.Creator
 
@@ -147,6 +163,7 @@ local Acrylic = __WINDUI_REQUIRE("src/utils/Acrylic/Init.lua")
 local ProtectGui = protectgui or (syn and syn.protect_gui) or function() end
 
 local GUIParent = gethui and gethui() or (CoreGui or LocalPlayer:WaitForChild("PlayerGui"))
+WindUI.GUIParent = GUIParent
 
 local UIScaleObj = New("UIScale", {
 	Scale = WindUI.UIScale,
@@ -159,7 +176,8 @@ WindUI.ScreenGui = New("ScreenGui", {
 	Parent = GUIParent,
 	IgnoreGuiInset = true,
 	ScreenInsets = "None",
-	DisplayOrder = -99999,
+	ZIndexBehavior = "Sibling",
+	DisplayOrder = WindUI.DisplayOrders.Window,
 }, {
 
 	New("Folder", {
@@ -186,16 +204,25 @@ WindUI.NotificationGui = New("ScreenGui", {
 	Name = "WindUI/Notifications",
 	Parent = GUIParent,
 	IgnoreGuiInset = true,
+	ScreenInsets = "None",
+	ZIndexBehavior = "Sibling",
+	DisplayOrder = WindUI.DisplayOrders.Notification,
 })
 WindUI.DropdownGui = New("ScreenGui", {
 	Name = "WindUI/Dropdowns",
 	Parent = GUIParent,
 	IgnoreGuiInset = true,
+	ScreenInsets = "None",
+	ZIndexBehavior = "Sibling",
+	DisplayOrder = WindUI.DisplayOrders.Dropdown,
 })
 WindUI.TooltipGui = New("ScreenGui", {
 	Name = "WindUI/Tooltips",
 	Parent = GUIParent,
 	IgnoreGuiInset = true,
+	ScreenInsets = "None",
+	ZIndexBehavior = "Sibling",
+	DisplayOrder = WindUI.DisplayOrders.Tooltip,
 })
 ProtectGui(WindUI.ScreenGui)
 ProtectGui(WindUI.NotificationGui)
@@ -264,17 +291,26 @@ function WindUI:OnThemeChange(func)
 end
 
 function WindUI:AddTheme(LTheme)
+	if type(LTheme) ~= "table" or not LTheme.Name then
+		return nil
+	end
 	WindUI.Themes[LTheme.Name] = LTheme
+	-- Rework (bug 5): a theme added/replaced at runtime must be applied to
+	-- already-created elements instead of only being stored in the table.
+	if WindUI.CurrentTheme == LTheme.Name or WindUI.Theme == LTheme then
+		Creator.SetTheme(LTheme)
+	end
 	return LTheme
 end
 
 function WindUI:SetTheme(Value)
 	if WindUI.Themes[Value] then
 		WindUI.Theme = WindUI.Themes[Value]
+		WindUI.CurrentTheme = Value -- rework: custom elements read this
 		Creator.SetTheme(WindUI.Themes[Value])
 
 		if WindUI.OnThemeChangeFunction then
-			WindUI.OnThemeChangeFunction(Value)
+			Creator.SafeCallback(WindUI.OnThemeChangeFunction, Value)
 		end
 
 		return WindUI.Themes[Value]
@@ -299,6 +335,10 @@ function WindUI:Localization(LocalizationConfig)
 end
 
 function WindUI:SetLanguage(Value)
+	if WindUI.ReworkLocalization.IsValid(Value) then
+		return WindUI.ReworkLocalization.SetLanguage(WindUI, Value)
+	end
+	-- Any custom language registered by the user still works.
 	if Creator.Localization then
 		return Creator.SetLanguage(Value)
 	end
@@ -374,10 +414,58 @@ WindUI.Themes = __WINDUI_REQUIRE("src/themes/Init.lua")(WindUI, Creator)
 Creator.Themes = WindUI.Themes
 
 WindUI:SetTheme("Dark")
-WindUI:SetLanguage(Creator.Language)
+
+-- Rework: RU/EN is built in and can be switched from the profile panel
+-- (or from code with `WindUI:SetLanguage("en")`).
+WindUI.ReworkLocalization.Install(WindUI, nil)
+WindUI:SetLanguage(WindUI.ReworkLocalization.GetLanguage())
+
+function WindUI:GetLanguage()
+	return Creator.Language
+end
+
+function WindUI:OnLanguageChange(callback)
+	return WindUI.ReworkLocalization.OnChange(callback)
+end
+
+function WindUI:SetDisplayOrder(name, value)
+	if WindUI.DisplayOrders[name] == nil or type(value) ~= "number" then
+		return false
+	end
+	WindUI.DisplayOrders[name] = value
+	local gui = ({
+		Window = WindUI.ScreenGui,
+		Dropdown = WindUI.DropdownGui,
+		Tooltip = WindUI.TooltipGui,
+		Notification = WindUI.NotificationGui,
+	})[name]
+	if gui then
+		gui.DisplayOrder = value
+	end
+	return true
+end
+
+function WindUI:SetLoadingEnabled(value)
+	WindUI.LoadingEnabled = value == true
+	if WindUI.LoadingScreen and WindUI.LoadingScreen.SetEnabled then
+		WindUI.LoadingScreen:SetEnabled(WindUI.LoadingEnabled)
+	end
+	return WindUI
+end
 
 function WindUI:CreateWindow(Config)
 	local CreateWindow = __WINDUI_REQUIRE("src/components/window/Init.lua")
+
+	-- Rework (bug 2): CreateWindow can be re-entered while the Key System
+	-- dialog is open. Without this guard two windows were created.
+	if WindUI.Window then
+		return WindUI.Window
+	end
+	if WindUI.CreateWindowBusy then
+		warn("[ WindUI ] CreateWindow is already in progress")
+		return WindUI.Window
+	end
+	WindUI.CreateWindowBusy = true
 
 	if not RunService:IsStudio() and writefile then
 		if not isfolder("WindUI") then
@@ -394,17 +482,30 @@ function WindUI:CreateWindow(Config)
 	Config.Window = WindUI.Window
 	Config.Parent = WindUI.ScreenGui.Window
 
-	if WindUI.Window then
-		warn("You cannot create more than one window")
-		return
+	local CanLoadWindow = true
+	local KeySystemCancelled = false
+
+	-- Rework (bug 5): go through the public API so `WindUI.Theme`,
+	-- `WindUI.CurrentTheme` and OnThemeChange stay in sync. Calling
+	-- Creator.SetTheme() directly left GetCurrentTheme() stale.
+	if Config.Theme then
+		WindUI:SetTheme(Config.Theme)
+	else
+		Creator.SetTheme(WindUI.Theme or WindUI.Themes.Dark)
 	end
 
-	local CanLoadWindow = true
-
-	local Theme = WindUI.Themes[Config.Theme or "Dark"]
-
-	--WindUI.Theme = Theme
-	Creator.SetTheme(Theme)
+	-- Rework: language + loading are configurable from code.
+	local Settings = type(Config.Settings) == "table" and Config.Settings or {}
+	local requestedLanguage = Config.Language or Settings.Language
+	if requestedLanguage then
+		WindUI:SetLanguage(requestedLanguage)
+	end
+	local loadingConfig = Config.Loading
+	if loadingConfig == nil then
+		loadingConfig = Settings.Loading
+	end
+	WindUI.LoadingScreen = LoadingScreen.New(WindUI, loadingConfig)
+	WindUI.LoadingEnabled = WindUI.LoadingScreen.Enabled
 
 	local hwid = gethwid or function()
 		return Players.LocalPlayer.UserId
@@ -415,10 +516,24 @@ function WindUI:CreateWindow(Config)
 	if Config.KeySystem then
 		CanLoadWindow = false
 
+		-- Rework (bug 2): one-shot resolution. The upstream callback could
+		-- fire twice, and closing the dialog left the `repeat task.wait()`
+		-- loop spinning forever (a real coroutine/CPU leak).
+		local resolved = false
+		local function resolveKey(success)
+			if resolved then
+				return
+			end
+			resolved = true
+			if success == true then
+				CanLoadWindow = true
+			else
+				KeySystemCancelled = true
+			end
+		end
+
 		local function loadKeysystem()
-			KeySystem.new(Config, Filename, function(c)
-				CanLoadWindow = c
-			end)
+			KeySystem.new(Config, Filename, resolveKey)
 		end
 
 		local keyPath = (Config.Folder or "Temp") .. "/" .. Filename .. ".key"
@@ -429,7 +544,7 @@ function WindUI:CreateWindow(Config)
 				local isValid = Config.KeySystem.KeyValidator(savedKey)
 
 				if isValid then
-					CanLoadWindow = true
+					resolveKey(true)
 				else
 					loadKeysystem()
 				end
@@ -443,7 +558,7 @@ function WindUI:CreateWindow(Config)
 					or tostring(Config.KeySystem.Key) == tostring(savedKey)
 
 				if isKey then
-					CanLoadWindow = true
+					resolveKey(true)
 				else
 					loadKeysystem()
 				end
@@ -472,7 +587,7 @@ function WindUI:CreateWindow(Config)
 					end
 				end
 
-				CanLoadWindow = isSuccess
+				if isSuccess then resolveKey(true) else loadKeysystem() end
 				if not isSuccess then
 					loadKeysystem()
 				end
@@ -481,13 +596,35 @@ function WindUI:CreateWindow(Config)
 			end
 		end
 
+		-- Bounded wait: yields a frame at a time (no busy spin) and always
+		-- terminates, even if the dialog is closed without a key.
+		local frames = 0
 		repeat
 			task.wait()
-		until CanLoadWindow
+			frames += 1
+		until CanLoadWindow or KeySystemCancelled or frames > 900
+
+		if not CanLoadWindow then
+			WindUI.CreateWindowBusy = false
+			if WindUI.LoadingScreen then
+				WindUI.LoadingScreen:Destroy()
+			end
+			return nil
+		end
 	end
 
 	local Window = CreateWindow(Config)
+	WindUI.CreateWindowBusy = false
 
+	if not Window then
+		if WindUI.LoadingScreen then
+			WindUI.LoadingScreen:Destroy()
+		end
+		return nil
+	end
+
+	Window.LoadingScreen = WindUI.LoadingScreen
+	Window.Settings = Settings
 	WindUI.Transparent = Config.Transparent
 	WindUI.Window = Window
 
@@ -25078,12 +25215,42 @@ local Tween = Creator.Tween
 
 local CreateButton = __WINDUI_REQUIRE("src/components/ui/Button.lua").New
 local CreateInput = __WINDUI_REQUIRE("src/components/ui/Input.lua").New
+local Localization = __WINDUI_REQUIRE("src/modules/ReworkLocalization.lua")
 
 function KeySystem.new(Config, Filename, func, keyValidator)
 	local KeyDialogInit = __WINDUI_REQUIRE("src/components/window/Dialog.lua")
 	local KeyDialog = KeyDialogInit.Create(true, "Popup", Config.Window, Config.WindUI, Config.WindUI.ScreenGui.KeySystem)
 
 	local Services = {}
+	local Connections = {}
+	local Finished = false
+
+	-- Rework (bug 2/8): every connection is tracked and released when the
+	-- dialog resolves; the callback can only fire once.
+	local function Connect(signal, fn)
+		local conn = Creator.AddSignal(signal, fn)
+		Connections[#Connections + 1] = conn
+		return conn
+	end
+
+	local function Finish(success)
+		if Finished then
+			return
+		end
+		Finished = true
+		for index = #Connections, 1, -1 do
+			local conn = Connections[index]
+			Connections[index] = nil
+			if conn then
+				pcall(function()
+					conn:Disconnect()
+				end)
+			end
+		end
+		if func then
+			Creator.SafeCallback(func, success == true)
+		end
+	end
 
 	local EnteredKey
 
@@ -25120,7 +25287,7 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 	local KeySystemTitle = New("TextLabel", {
 		AutomaticSize = "XY",
 		BackgroundTransparency = 1,
-		Text = "Key System",
+		Text = Localization.Key("keysystem.title"),
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, 0, 0.5, 0),
 		TextTransparency = 1, -- .4 -- hidden
@@ -25158,7 +25325,7 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 		KeySystemTitle,
 	})
 
-	local InputFrame = CreateInput("Enter Key", "key", nil, "Input", function(k)
+	local InputFrame = CreateInput(Localization.Get("keysystem.enter"), "key", nil, "Input", function(k)
 		EnteredKey = k
 	end)
 
@@ -25262,8 +25429,9 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 	--     CreateButton(values.Title, values.Icon, values.Callback, values.Variant)
 	-- end
 
-	local ExitButton = CreateButton("Exit", "log-out", function()
-		KeyDialog:Close()()
+	local ExitButton = CreateButton(Localization.Key("keysystem.exit"), "log-out", function()
+		KeyDialog:Close()
+		Finish(false)
 	end, "Tertiary", ButtonsContainer.Frame)
 
 	if ThumbnailFrame then
@@ -25273,13 +25441,25 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 		ExitButton.AnchorPoint = Vector2.new(0, 1)
 	end
 
+	-- Rework: "Get Key" is always present at the bottom of the dialog.
+	local HasGetKeyButton = false
+
 	if Config.KeySystem.URL then
-		CreateButton("Get key", "key", function()
-			setclipboard(Config.KeySystem.URL)
+		HasGetKeyButton = true
+		CreateButton(Localization.Key("keysystem.get"), "key", function()
+			if setclipboard then
+				pcall(setclipboard, Config.KeySystem.URL)
+			end
+			Config.WindUI:Notify({
+				Title = Localization.Get("keysystem.title"),
+				Content = Localization.Get("keysystem.copied"),
+				Icon = "key",
+			})
 		end, "Secondary", ButtonsContainer.Frame)
 	end
 
 	if Config.KeySystem.API then
+		HasGetKeyButton = true
 		-- local Icons = {
 		--     platoboost = "rbxassetid://75920162824531",
 		--     pandadevelopment = "panda",
@@ -25290,7 +25470,7 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 		-- }
 		local Width = 240
 		local Opened = false
-		local ButtonFrame = CreateButton("Get key", "key", nil, "Secondary", ButtonsContainer.Frame)
+		local ButtonFrame = CreateButton(Localization.Key("keysystem.get"), "key", nil, "Secondary", ButtonsContainer.Frame)
 
 		local Divider = Creator.NewRoundFrame(99, "Squircle", {
 			Size = UDim2.new(0, 1, 1, 0),
@@ -25455,24 +25635,24 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 					}),
 				}, true)
 
-				Creator.AddSignal(APIFrame.MouseEnter, function()
+				Connect(APIFrame.MouseEnter, function()
 					Tween(APIFrame, 0.08, { ImageTransparency = 0.95 }):Play()
 				end)
-				Creator.AddSignal(APIFrame.InputEnded, function()
+				Connect(APIFrame.InputEnded, function()
 					Tween(APIFrame, 0.08, { ImageTransparency = 1 }):Play()
 				end)
-				Creator.AddSignal(APIFrame.MouseButton1Click, function()
+				Connect(APIFrame.MouseButton1Click, function()
 					serviceInstance.Copy()
 					Config.WindUI:Notify({
 						Title = "Key System",
-						Content = "Key link copied to clipboard.",
+						Content = Localization.Get("keysystem.copied"),
 						Image = "key",
 					})
 				end)
 			end
 		end
 
-		Creator.AddSignal(ButtonFrame.MouseButton1Click, function()
+		Connect(ButtonFrame.MouseButton1Click, function()
 			if not Opened then
 				Tween(
 					DropdownContainer,
@@ -25496,14 +25676,26 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 		end)
 	end
 
-	local function handleSuccess(key)
-		KeyDialog:Close()()
-		writefile((Config.Folder or "Temp") .. "/" .. Filename .. ".key", tostring(key))
-		task.wait(0.4)
-		func(true)
+	if not HasGetKeyButton then
+		CreateButton(Localization.Key("keysystem.get"), "key", function()
+			Config.WindUI:Notify({
+				Title = Localization.Get("keysystem.title"),
+				Content = "No key link configured (KeySystem.URL / KeySystem.API).",
+				Icon = "key",
+			})
+		end, "Secondary", ButtonsContainer.Frame)
 	end
 
-	local SubmitButton = CreateButton("Submit", "arrow-right", function()
+	local function handleSuccess(key)
+		KeyDialog:Close()
+		if Config.KeySystem.SaveKey and writefile then
+			pcall(writefile, (Config.Folder or "Temp") .. "/" .. Filename .. ".key", tostring(key))
+		end
+		task.wait(0.4)
+		Finish(true)
+	end
+
+	local SubmitButton = CreateButton(Localization.Key("keysystem.check"), "arrow-right", function()
 		local key = tostring(EnteredKey or "empty")
 		local folder = Config.Folder or Config.Title
 
@@ -25514,14 +25706,14 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 				if Config.KeySystem.SaveKey then
 					handleSuccess(key)
 				else
-					KeyDialog:Close()()
+					KeyDialog:Close()
 					task.wait(0.4)
-					func(true)
+					Finish(true)
 				end
 			else
 				Config.WindUI:Notify({
 					Title = "Key System. Error",
-					Content = "Invalid key.",
+					Content = Localization.Get("keysystem.invalid"),
 					Icon = "triangle-alert",
 				})
 			end
@@ -25533,9 +25725,9 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 				if Config.KeySystem.SaveKey then
 					handleSuccess(key)
 				else
-					KeyDialog:Close()()
+					KeyDialog:Close()
 					task.wait(0.4)
-					func(true)
+					Finish(true)
 				end
 			end
 		else
@@ -27183,6 +27375,23 @@ local TabBackgroundTransparency = 0.67
 function DropdownMenu.New(Config, Dropdown, Element, Type)
 	local DropdownModule = {}
 
+	-- Rework (bug 8): connections belong to this dropdown instance and are
+	-- all disconnected when the element is destroyed.
+	local ConnectionGroup = "dropdown_" .. tostring(Dropdown)
+	local function ConnectDropdown(signal, fn)
+		return Creator.AddScopedSignal(ConnectionGroup, signal, fn)
+	end
+
+	local RowGroup = ConnectionGroup .. "_rows"
+	local function ConnectDropdownRow(signal, fn)
+		return Creator.AddScopedSignal(RowGroup, signal, fn)
+	end
+
+	function DropdownModule:Destroy()
+		Creator.DisconnectGroup(RowGroup)
+		Creator.DisconnectGroup(ConnectionGroup)
+	end
+
 	if not Dropdown.Callback then
 		Type = "Menu"
 	end
@@ -27243,6 +27452,9 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 		Position = UDim2.new(-10, 0, -10, 0),
 		Visible = false,
 		Active = false,
+		-- Rework (bug 7): dropdowns live in their own ScreenGui; make the
+		-- z-order explicit so they can never slip under a window.
+		ZIndex = 9999,
 		--GroupTransparency = 1, -- 0
 		Parent = Config.WindUI.DropdownGui,
 		AnchorPoint = Vector2.new(1, 0),
@@ -27417,11 +27629,16 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 		end
 	end
 
-	function DropdownModule:Refresh(Values)
+	function DropdownModule:Refresh(Values, silent)
 		if Config.Window.Destroyed then
 			return
 		end
+		if type(Values) ~= "table" then
+			Values = Dropdown.Values or {}
+		end
 
+		-- Rework (bug 8): row connections must die with the old rows.
+		Creator.DisconnectGroup(RowGroup)
 		for _, Elementt in next, Dropdown.UIElements.Menu.Frame.ScrollingFrame:GetChildren() do
 			if not Elementt:IsA("UIListLayout") then
 				Elementt:Destroy()
@@ -27626,7 +27843,7 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 				DropdownModule:Display()
 
 				if Type == "Dropdown" then
-					Creator.AddSignal(TabMain.UIElements.TabItem.MouseButton1Click, function()
+					ConnectDropdownRow(TabMain.UIElements.TabItem.MouseButton1Click, function()
 						if Dropdown.Locked or TabMain.Locked then
 							return
 						end
@@ -27691,14 +27908,14 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 					end)
 				elseif Type == "Menu" then
 					if not TabMain.Locked then
-						Creator.AddSignal(TabMain.UIElements.TabItem.MouseEnter, function()
+						ConnectDropdownRow(TabMain.UIElements.TabItem.MouseEnter, function()
 							Tween(TabMain.UIElements.TabItem, 0.08, { ImageTransparency = TabBackgroundTransparency }):Play()
 						end)
-						Creator.AddSignal(TabMain.UIElements.TabItem.InputEnded, function()
+						ConnectDropdownRow(TabMain.UIElements.TabItem.InputEnded, function()
 							Tween(TabMain.UIElements.TabItem, 0.08, { ImageTransparency = 1 }):Play()
 						end)
 					end
-					Creator.AddSignal(TabMain.UIElements.TabItem.MouseButton1Click, function()
+					ConnectDropdownRow(TabMain.UIElements.TabItem.MouseButton1Click, function()
 						if Dropdown.Locked or TabMain.Locked then
 							return
 						end
@@ -27728,14 +27945,25 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 			Dropdown.UIElements.MenuCanvas.Size.Y.Scale,
 			Dropdown.UIElements.MenuCanvas.Size.Y.Offset
 		)
-		Callback()
+		-- Rework (bug 1): applying a saved config value must not re-fire
+		-- the user's Callback. `Callback()` is what triggers it.
+		if not silent then
+			Callback()
+		end
 
 		Dropdown.Values = Values
 	end
 
-	DropdownModule:Refresh(Dropdown.Values)
+	DropdownModule:Refresh(Dropdown.Values, true)
 
-	function DropdownModule:Select(Items)
+	-- Rework (bug 3): `Options` / `Values` can now be replaced at runtime.
+	function DropdownModule:SetValues(Values, keepSelection)
+		DropdownModule:Refresh(Values, keepSelection ~= false)
+		DropdownModule:Display()
+		return DropdownModule
+	end
+
+	function DropdownModule:Select(Items, silent)
 		if Items then
 			Dropdown.Value = Items
 		else
@@ -27745,7 +27973,9 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 				Dropdown.Value = nil
 			end
 		end
-		DropdownModule:Refresh(Dropdown.Values)
+		DropdownModule:Refresh(Dropdown.Values, silent)
+		DropdownModule:Display()
+		return DropdownModule
 	end
 
 	RecalculateListSize()
@@ -27794,7 +28024,7 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 		end)
 	end
 
-	Creator.AddSignal(
+	ConnectDropdown(
 		(
 			Dropdown.UIElements.Dropdown and Dropdown.UIElements.Dropdown.MouseButton1Click
 			or Dropdown.DropdownFrame.UIElements.Main.MouseButton1Click
@@ -27804,11 +28034,33 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 		end
 	)
 
-	Creator.AddSignal(UserInputService.InputBegan, function(Input)
+	-- Rework (bug 3/6): Player:GetMouse().X/Y is viewport space (it ignores
+	-- GuiInset), while AbsolutePosition with IgnoreGuiInset = true is full
+	-- screen space. On phones that offset made outside-click detection
+	-- fail. Input.Position is in the very same space as AbsolutePosition.
+	local function PointerPosition(Input)
+		if Input and Input.Position and (Input.Position.X ~= 0 or Input.Position.Y ~= 0) then
+			return Input.Position.X, Input.Position.Y
+		end
+		local ok, location = pcall(function()
+			return UserInputService:GetMouseLocation()
+		end)
+		if ok and location then
+			return location.X, location.Y
+		end
+		return Mouse.X, Mouse.Y
+	end
+
+	ConnectDropdown(UserInputService.InputBegan, function(Input)
 		if
 			Input.UserInputType == Enum.UserInputType.MouseButton1
 			or Input.UserInputType == Enum.UserInputType.Touch
 		then
+			if not Config.Window.CanDropdown or not Dropdown.Opened then
+				return
+			end
+
+			local x, y = PointerPosition(Input)
 			local menuCanvas = Dropdown.UIElements.MenuCanvas
 			local AbsPos, AbsSize = menuCanvas.AbsolutePosition, menuCanvas.AbsoluteSize
 
@@ -27816,23 +28068,23 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 			local ButtonAbsPos = DropdownButton.AbsolutePosition
 			local ButtonAbsSize = DropdownButton.AbsoluteSize
 
-			local isClickOnDropdown = Mouse.X >= ButtonAbsPos.X
-				and Mouse.X <= ButtonAbsPos.X + ButtonAbsSize.X
-				and Mouse.Y >= ButtonAbsPos.Y
-				and Mouse.Y <= ButtonAbsPos.Y + ButtonAbsSize.Y
+			local isClickOnDropdown = x >= ButtonAbsPos.X
+				and x <= ButtonAbsPos.X + ButtonAbsSize.X
+				and y >= ButtonAbsPos.Y
+				and y <= ButtonAbsPos.Y + ButtonAbsSize.Y
 
-			local isClickOnMenu = Mouse.X >= AbsPos.X
-				and Mouse.X <= AbsPos.X + AbsSize.X
-				and Mouse.Y >= AbsPos.Y
-				and Mouse.Y <= AbsPos.Y + AbsSize.Y
+			local isClickOnMenu = x >= AbsPos.X
+				and x <= AbsPos.X + AbsSize.X
+				and y >= AbsPos.Y
+				and y <= AbsPos.Y + AbsSize.Y
 
-			if Config.Window.CanDropdown and Dropdown.Opened and not isClickOnDropdown and not isClickOnMenu then
+			if not isClickOnDropdown and not isClickOnMenu then
 				DropdownModule:Close()
 			end
 		end
 	end)
 
-	Creator.AddSignal(
+	ConnectDropdown(
 		Dropdown.UIElements.Dropdown and Dropdown.UIElements.Dropdown:GetPropertyChangedSignal("AbsolutePosition")
 			or Dropdown.DropdownFrame.UIElements.Main:GetPropertyChangedSignal("AbsolutePosition"),
 		UpdatePosition
@@ -31143,8 +31395,16 @@ return function(Config)
 		if Window.ProfilePanel then
 			return Window.ProfilePanel
 		end
-		Window.ProfilePanel = ProfilePanel.New(Window, ProfileConfig or {}, Config.WindUI)
-		return Window.ProfilePanel
+		local Panel = ProfilePanel.New(Window, ProfileConfig or {}, Config.WindUI)
+		Window.ProfilePanel = Panel
+		-- Rework: RU/EN + Dark/Light + loading toggles live in the panel.
+		-- Set `Settings = false` in CreateWindow to hide that section.
+		if Config.Settings ~= false and Panel.AddSettings then
+			pcall(function()
+				Panel:AddSettings()
+			end)
+		end
+		return Panel
 	end
 
 	function Window:SetTitle(text)
@@ -31309,6 +31569,13 @@ return function(Config)
 		if Window.Destroyed then
 			return
 		end
+		-- Rework: state must change IMMEDIATELY, not after `task.wait(0.06)`.
+		-- Otherwise clicking the open button twice (or tapping fast on a
+		-- phone) toggled the window twice and it ended up closed again.
+		Window.Closed = false
+		if Window.OpenButtonMain and Window.OpenButtonMain.SetOpenState then
+			Window.OpenButtonMain:SetOpenState(false)
+		end
 		task.spawn(function()
 			if Window.OnOpenCallback then
 				task.spawn(function()
@@ -31317,7 +31584,6 @@ return function(Config)
 			end
 
 			task.wait(0.06)
-			Window.Closed = false
 
 			Window.UIElements.Main.Size = UDim2.new(Window.Size.X.Scale, Window.Size.X.Offset, 0, 100)
 			if Window.UIElements.ReworkScale then
@@ -31435,6 +31701,9 @@ return function(Config)
 
 		Window.CanDropdown = false
 		Window.Closed = true
+		if Window.OpenButtonMain and Window.OpenButtonMain.SetOpenState then
+			Window.OpenButtonMain:SetOpenState(true)
+		end
 
 		Animations:Play(Window.UIElements.Main, "Close", {
 			Size = UDim2.new(Window.Size.X.Scale, Window.Size.X.Offset, 0, 0),
@@ -31522,6 +31791,19 @@ return function(Config)
 				Window.Destroyed = true
 
 				task.wait(0.4)
+
+				-- Rework (bug 8): release drag connections before the guis
+				-- disappear, then disconnect every remaining signal.
+				if WindowDragModule and WindowDragModule.Destroy then
+					pcall(function()
+						WindowDragModule:Destroy()
+					end)
+				end
+				if Config.WindUI and Config.WindUI.LoadingScreen then
+					pcall(function()
+						Config.WindUI.LoadingScreen:Destroy()
+					end)
+				end
 
 				Config.WindUI.ScreenGui:Destroy()
 				Config.WindUI.NotificationGui:Destroy()
@@ -31692,11 +31974,12 @@ return function(Config)
 		Window:EditOpenButton(Window.OpenButton)
 	end
 
-	-- `Window.Profile = {...}` in CreateWindow builds the panel automatically.
-	if Window.ProfileConfig and typeof(Window.ProfileConfig) == "table" then
+	-- `Window.Profile = {...}` (or `Settings = {...}`) builds the panel.
+	local wantsSettings = Config.Settings ~= nil and Config.Settings ~= false
+	if (Window.ProfileConfig and typeof(Window.ProfileConfig) == "table") or wantsSettings then
 		task.defer(function()
 			if not Window.Destroyed and not Window.ProfilePanel then
-				Window:Profile(Window.ProfileConfig)
+				Window:Profile(Window.ProfileConfig or {})
 			end
 		end)
 	end
@@ -32251,6 +32534,276 @@ return function(Config)
 end
 end
 
+__WINDUI_MODULES["src/components/window/LoadingScreen.lua"] = function()
+--[[
+    WindUI Rework / LoadingScreen
+    ------------------------------------------------------------------
+    Optional, configurable loading overlay shown while the UI boots.
+
+    Enable it from code (no UI code required):
+
+        WindUI:CreateWindow({
+            ...
+            Loading = true,                  -- shorthand
+            -- or
+            Loading = {
+                Enabled   = true,
+                Duration  = 1.2,             -- seconds, 0 = no auto hide
+                Title     = "My Hub",
+                Subtitle  = "loc:rework.loading.status",
+                AutoHide  = true,
+                Steps     = { "Loading config…", "Building tabs…" },
+            },
+        })
+
+    A `Loading` toggle in the profile panel settings can turn it on/off
+    at runtime; `WindUI:SetLoadingEnabled(bool)` does the same from code.
+    `Loading = false` (the default) creates nothing at all.
+]]
+
+local Creator = __WINDUI_REQUIRE("src/modules/Creator.lua")
+local Animations = __WINDUI_REQUIRE("src/modules/Animations.lua")
+local Localization = __WINDUI_REQUIRE("src/modules/ReworkLocalization.lua")
+local New = Creator.New
+
+local LoadingScreen = {}
+
+local function NormaliseConfig(value)
+	if value == true then
+		return { Enabled = true }
+	end
+	if typeof(value) == "table" then
+		local copy = {}
+		for key, item in pairs(value) do
+			copy[key] = item
+		end
+		copy.Enabled = copy.Enabled ~= false
+		return copy
+	end
+	return { Enabled = false }
+end
+
+function LoadingScreen.New(WindUI, value)
+	local Config = NormaliseConfig(value)
+
+	local Screen = {
+		Enabled = Config.Enabled == true,
+		Visible = false,
+		Destroyed = false,
+		Progress = 0,
+		Duration = math.max(tonumber(Config.Duration) or 1.1, 0),
+		AutoHide = Config.AutoHide ~= false,
+		Steps = type(Config.Steps) == "table" and Config.Steps or nil,
+	}
+
+	if not Screen.Enabled then
+		-- Fully inert: no ScreenGui, no connections, no task.delay.
+		function Screen:SetProgress() return self end
+		function Screen:SetStatus() return self end
+		function Screen:Finish() return self end
+		function Screen:Destroy() return self end
+		function Screen:SetEnabled() return self end
+		return Screen
+	end
+
+	local Parent = (WindUI and WindUI.GUIParent)
+		or (WindUI and WindUI.ScreenGui and WindUI.ScreenGui.Parent)
+		or nil
+
+	local Gui = New("ScreenGui", {
+		Name = "WindUI/Loading",
+		Parent = Parent,
+		IgnoreGuiInset = true,
+		ScreenInsets = "None",
+		ResetOnSpawn = false,
+		ZIndexBehavior = "Sibling",
+		DisplayOrder = (WindUI and WindUI.DisplayOrders and WindUI.DisplayOrders.Loading) or 100,
+	})
+
+	local Backdrop = New("Frame", {
+		Name = "Backdrop",
+		Parent = Gui,
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundColor3 = Color3.fromHex("#0A0A0C"),
+		BackgroundTransparency = 0.15,
+		BorderSizePixel = 0,
+		ZIndex = 1,
+	})
+
+	local Card = New("Frame", {
+		Name = "Card",
+		Parent = Backdrop,
+		Size = UDim2.new(0, 340, 0, 148),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundColor3 = Color3.fromHex("#141418"),
+		BackgroundTransparency = 0,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, {
+		New("UICorner", { CornerRadius = UDim.new(0, 16) }),
+		New("UIStroke", {
+			Color = Color3.fromHex("#FFFFFF"),
+			Transparency = 0.88,
+			Thickness = 1,
+		}),
+	})
+
+	local Title = New("TextLabel", {
+		Name = "Title",
+		Parent = Card,
+		Size = UDim2.new(1, -40, 0, 30),
+		Position = UDim2.new(0, 20, 0, 22),
+		Text = tostring(Config.Title or Localization.Get("loading.title")),
+		TextSize = 20,
+		TextXAlignment = "Left",
+		FontFace = Font.new(Creator.Font, Enum.FontWeight.SemiBold),
+		TextColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 1,
+		ZIndex = 3,
+	})
+
+	local Status = New("TextLabel", {
+		Name = "Status",
+		Parent = Card,
+		Size = UDim2.new(1, -40, 0, 20),
+		Position = UDim2.new(0, 20, 0, 54),
+		Text = tostring(Config.Subtitle or Localization.Get("loading.status")),
+		TextSize = 13,
+		TextXAlignment = "Left",
+		TextTransparency = 0.45,
+		FontFace = Font.new(Creator.Font, Enum.FontWeight.Medium),
+		TextColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 1,
+		ZIndex = 3,
+	})
+
+	local Track = New("Frame", {
+		Name = "Track",
+		Parent = Card,
+		Size = UDim2.new(1, -40, 0, 6),
+		Position = UDim2.new(0, 20, 1, -40),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 0.88,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, {
+		New("UICorner", { CornerRadius = UDim.new(1, 0) }),
+	})
+
+	local Fill = New("Frame", {
+		Name = "Fill",
+		Parent = Track,
+		Size = UDim2.new(0, 0, 1, 0),
+		BackgroundColor3 = Color3.fromHex("#0091FF"),
+		BorderSizePixel = 0,
+		ZIndex = 4,
+	}, {
+		New("UICorner", { CornerRadius = UDim.new(1, 0) }),
+	})
+
+	local Percent = New("TextLabel", {
+		Name = "Percent",
+		Parent = Card,
+		Size = UDim2.new(0, 60, 0, 18),
+		Position = UDim2.new(1, -20, 1, -34),
+		AnchorPoint = Vector2.new(1, 0),
+		Text = "0%",
+		TextSize = 12,
+		TextXAlignment = "Right",
+		TextTransparency = 0.4,
+		FontFace = Font.new(Creator.Font, Enum.FontWeight.Medium),
+		TextColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 1,
+		ZIndex = 3,
+	})
+
+	Screen.UIElements = { Gui = Gui, Card = Card, Title = Title, Status = Status }
+	Screen.Visible = true
+
+	function Screen:SetProgress(value, status)
+		if self.Destroyed then
+			return self
+		end
+		local progress = math.clamp(tonumber(value) or 0, 0, 1)
+		self.Progress = progress
+		Animations:Play(Fill, "Fast", { Size = UDim2.new(progress, 0, 1, 0) }, "Quint", "Out")
+		Percent.Text = tostring(math.floor(progress * 100 + 0.5)) .. "%"
+		if status ~= nil then
+			Status.Text = tostring(status)
+		end
+		return self
+	end
+
+	function Screen:SetStatus(text)
+		if not self.Destroyed then
+			Status.Text = tostring(text)
+		end
+		return self
+	end
+
+	function Screen:Finish()
+		if self.Destroyed or not self.Visible then
+			return self
+		end
+		self:SetProgress(1, Localization.Get("loading.ready"))
+		self.Visible = false
+		Animations:Play(Backdrop, "Close", { BackgroundTransparency = 1 }, "Quint", "Out")
+		Animations:Play(Card, "Close", { Size = UDim2.new(0, 300, 0, 130) }, "Quint", "InOut")
+		task.delay(Animations:Get("Close") + 0.05, function()
+			if Gui and Gui.Parent then
+				Gui:Destroy()
+			end
+		end)
+		return self
+	end
+
+	function Screen:Destroy()
+		if self.Destroyed then
+			return self
+		end
+		self.Destroyed = true
+		self.Visible = false
+		if Gui and Gui.Parent then
+			Gui:Destroy()
+		end
+		return self
+	end
+
+	function Screen:SetEnabled(value)
+		self.Enabled = value == true
+		if not self.Enabled then
+			self:Destroy()
+		end
+		return self
+	end
+
+	-- Auto progress: a handful of discrete steps, no infinite loops.
+	if Screen.AutoHide and Screen.Duration > 0 then
+		local steps = Screen.Steps
+		local total = (steps and #steps > 0 and #steps) or 4
+		for index = 1, total do
+			local progress = index / total
+			local label = steps and steps[index] or nil
+			task.delay(Screen.Duration * (index / total), function()
+				if Screen.Visible and not Screen.Destroyed then
+					Screen:SetProgress(progress, label)
+				end
+			end)
+		end
+		task.delay(Screen.Duration + 0.1, function()
+			if Screen.Visible and not Screen.Destroyed then
+				Screen:Finish()
+			end
+		end)
+	end
+
+	return Screen
+end
+
+return LoadingScreen
+end
+
 __WINDUI_MODULES["src/components/window/Openbutton.lua"] = function()
 --[[
     WindUI Rework / OpenButton
@@ -32279,6 +32832,7 @@ __WINDUI_MODULES["src/components/window/Openbutton.lua"] = function()
 
 local Creator = __WINDUI_REQUIRE("src/modules/Creator.lua")
 local Animations = __WINDUI_REQUIRE("src/modules/Animations.lua")
+local Localization = __WINDUI_REQUIRE("src/modules/ReworkLocalization.lua")
 local New = Creator.New
 
 local cloneref = (cloneref or clonereference or function(instance)
@@ -32296,6 +32850,8 @@ function OpenButton.New(Window)
 		StayVisible = false,
 		Draggable = true,
 		VisibleState = false,
+		WindowClosed = false,
+		DefaultTitle = Window.Title or "WindUI",
 	}
 
 	local Icon
@@ -32582,6 +33138,27 @@ function OpenButton.New(Window)
 		)
 	end
 
+	-- Rework: the button now has an explicit open/closed state. While the
+	-- window is open and `StayVisible` is on, it says "Close" and clicking
+	-- it really closes the menu (before it re-animated and looked broken).
+	function OpenButtonMain:SetOpenState(windowClosed)
+		local closed = windowClosed == true
+		if self.WindowClosed == closed then
+			return self
+		end
+		self.WindowClosed = closed
+		if self.StayVisible then
+			Title.Text = Localization.Key(closed and "open" or "close")
+		else
+			Title.Text = self.DefaultTitle or "WindUI"
+		end
+		return self
+	end
+
+	function OpenButtonMain:IsWindowOpen()
+		return not self.WindowClosed
+	end
+
 	function OpenButtonMain:ShouldShow()
 		if not self.Enabled or Window.Destroyed then
 			return false
@@ -32603,6 +33180,12 @@ function OpenButton.New(Window)
 		local token = VisibilityToken
 
 		if value == true then
+			-- Rework: never replay the "appear" animation when the button is
+			-- already on screen (Window:Open() used to call Visible(true)
+			-- every time, making the button flash/teleport).
+			if self.VisibleState and Container.Visible then
+				return self
+			end
 			self.VisibleState = true
 			Container.Size = UDim2.new(
 				0, math.max(Button.AbsoluteSize.X, 120),
@@ -32623,6 +33206,9 @@ function OpenButton.New(Window)
 				PulseHandle = Animations:Pulse(Button.UIStroke, "Transparency", 0.1, 0.45, 2.2)
 			end
 		else
+			if not self.VisibleState and not Container.Visible then
+				return self
+			end
 			self.VisibleState = false
 			if PulseHandle then
 				PulseHandle:Stop()
@@ -32721,6 +33307,10 @@ function OpenButton.New(Window)
 			self.OnlyMobile = false
 		end
 		self.StayVisible = Module.StayVisible == true
+		-- Refresh the label for the new StayVisible value.
+		local wasClosed = self.WindowClosed
+		self.WindowClosed = nil
+		self:SetOpenState(wasClosed)
 
 		if Module.Draggable ~= nil then
 			self.Draggable = Module.Draggable == true
@@ -32841,6 +33431,7 @@ local Players = cloneref(game:GetService("Players"))
 
 local Creator = __WINDUI_REQUIRE("src/modules/Creator.lua")
 local Animations = __WINDUI_REQUIRE("src/modules/Animations.lua")
+local Localization = __WINDUI_REQUIRE("src/modules/ReworkLocalization.lua")
 local New = Creator.New
 
 local ProfilePanel = {}
@@ -32853,21 +33444,23 @@ local ACCENT = Color3.fromHex("0091FF")
 local DEFAULT_SECTIONS = {
 	{
 		Title = "Комбат",
+		TitleKey = "combat",
 		Icon = "crosshair",
 		Items = {
-			{ Title = "Сайлент аим", Flag = "SilentAim", Default = false },
-			{ Title = "Аимбот", Flag = "Aimbot", Default = false },
-			{ Title = "Триггербот", Flag = "TriggerBot", Default = false },
-			{ Title = "Kill All", Flag = "KillAll", Type = "Button" },
+			{ Title = "Сайлент аим", Flag = "SilentAim", TitleKey = "silentaim", Default = false },
+			{ Title = "Аимбот", Flag = "Aimbot", TitleKey = "aimbot", Default = false },
+			{ Title = "Триггербот", Flag = "TriggerBot", TitleKey = "triggerbot", Default = false },
+			{ Title = "Kill All", Flag = "KillAll", TitleKey = "killall", Type = "Button" },
 		},
 	},
 	{
 		Title = "Визуалы",
+		TitleKey = "visuals",
 		Icon = "eye",
 		Items = {
-			{ Title = "ESP", Flag = "ESP", Default = false },
-			{ Title = "ESP Box", Flag = "ESPBox", Default = false },
-			{ Title = "ESP Skeleton", Flag = "ESPSkeleton", Default = false },
+			{ Title = "ESP", Flag = "ESP", TitleKey = "esp", Default = false },
+			{ Title = "ESP Box", Flag = "ESPBox", TitleKey = "espbox", Default = false },
+			{ Title = "ESP Skeleton", Flag = "ESPSkeleton", TitleKey = "espskeleton", Default = false },
 		},
 	},
 }
@@ -32888,6 +33481,34 @@ local function NormaliseBoolean(value, fallback)
 		end
 	end
 	return fallback == true
+end
+
+-- Rework: "Choice" rows are a compact two/three-state selector used for
+-- the RU/EN language switch and the Dark/Light theme switch.
+local function NormaliseOptions(options)
+	local result = {}
+	for _, option in ipairs(options or {}) do
+		if typeof(option) == "table" then
+			result[#result + 1] = {
+				Value = option.Value ~= nil and option.Value or (option.Label or option[1]),
+				Label = option.Label,
+				LabelKey = option.LabelKey,
+			}
+		else
+			result[#result + 1] = { Value = option, Label = tostring(option) }
+		end
+	end
+	return result
+end
+
+local function OptionLabel(option, language)
+	if not option then
+		return ""
+	end
+	if option.LabelKey then
+		return Localization.Get(option.LabelKey, language)
+	end
+	return tostring(option.Label ~= nil and option.Label or option.Value)
 end
 
 local function CopySections(sections)
@@ -33117,7 +33738,7 @@ function ProfilePanel.New(Window, Config, WindUI)
 		Parent = Header,
 		Position = UDim2.new(0, 58, 0, 31),
 		Size = UDim2.new(1, -110, 0, 16),
-		Text = Config.Subtitle or "Настройки профиля",
+		Text = Config.Subtitle or Localization.Key("profile.subtitle"),
 		TextSize = 12,
 		TextTransparency = 0.45,
 		TextXAlignment = "Left",
@@ -33366,6 +33987,8 @@ function ProfilePanel.New(Window, Config, WindUI)
 	------------------------------------------------------------------
 	local function CreateItem(Section, ItemConfig)
 		local ItemType = ItemConfig.Type or "Toggle"
+		local IsChoice = ItemType == "Choice"
+		local Options = NormaliseOptions(ItemConfig.Options)
 		local Row = New("TextButton", {
 			Name = "Row",
 			Parent = Section.Content,
@@ -33391,7 +34014,8 @@ function ProfilePanel.New(Window, Config, WindUI)
 			Parent = Row,
 			Size = UDim2.new(1, -62, 1, 0),
 			Position = UDim2.new(0, 12, 0, 0),
-			Text = ItemConfig.Title or "Item",
+			Text = ItemConfig.TitleKey and Localization.Key(ItemConfig.TitleKey)
+				or (ItemConfig.Title or "Item"),
 			TextSize = 13,
 			TextXAlignment = "Left",
 			TextTruncate = "AtEnd",
@@ -33401,8 +34025,25 @@ function ProfilePanel.New(Window, Config, WindUI)
 			ThemeTag = { TextColor3 = "Text" },
 		})
 
-		local Pill, Knob, Arrow
-		if ItemType == "Button" then
+		local Pill, Knob, Arrow, ValueLabel
+		if IsChoice then
+			ValueLabel = New("TextLabel", {
+				Name = "Value",
+				Parent = Row,
+				Size = UDim2.new(0, 96, 1, 0),
+				Position = UDim2.new(1, -12, 0, 0),
+				AnchorPoint = Vector2.new(1, 0),
+				Text = "",
+				TextSize = 12,
+				TextXAlignment = "Right",
+				TextTruncate = "AtEnd",
+				TextTransparency = 0.15,
+				BackgroundTransparency = 1,
+				ZIndex = 205,
+				ThemeTag = { TextColor3 = "Icon" },
+			})
+			Label.Size = UDim2.new(1, -120, 1, 0)
+		elseif ItemType == "Button" then
 			Arrow = New("TextLabel", {
 				Name = "Arrow",
 				Parent = Row,
@@ -33442,11 +34083,15 @@ function ProfilePanel.New(Window, Config, WindUI)
 		end
 
 		local Item = {
-			__type = ItemType == "Button" and "Button" or "Toggle",
+			__type = IsChoice and "Choice" or (ItemType == "Button" and "Button" or "Toggle"),
 			Type = ItemType,
 			Title = ItemConfig.Title or "Item",
+			TitleKey = ItemConfig.TitleKey,
 			Flag = ItemConfig.Flag,
-			Value = NormaliseBoolean(ItemConfig.Default, false),
+			Options = Options,
+			Value = IsChoice
+				and (ItemConfig.Default ~= nil and ItemConfig.Default or (Options[1] and Options[1].Value))
+				or NormaliseBoolean(ItemConfig.Default, false),
 			Callback = ItemConfig.Callback,
 			UIElements = {
 				Row = Row,
@@ -33455,6 +34100,7 @@ function ProfilePanel.New(Window, Config, WindUI)
 				Pill = Pill,
 				Knob = Knob,
 				Arrow = Arrow,
+				ValueLabel = ValueLabel,
 			},
 		}
 
@@ -33473,7 +34119,18 @@ function ProfilePanel.New(Window, Config, WindUI)
 					Animations:Play(Row, "Hover", { Size = UDim2.new(1, 0, 0, 34) }, "Pop", "Out")
 				end
 			end)
-			if ItemType == "Button" then
+			if IsChoice then
+				local index = 1
+				for i, option in ipairs(Options) do
+					if option.Value == Item.Value then
+						index = i
+						break
+					end
+				end
+				if #Options > 0 then
+					Item:Set(Options[(index % #Options) + 1].Value, true)
+				end
+			elseif ItemType == "Button" then
 				Creator.SafeCallback(Item.Callback, true)
 			else
 				Item:Set(not Item.Value, true)
@@ -33494,6 +34151,27 @@ function ProfilePanel.New(Window, Config, WindUI)
 			if Item.Type == "Button" then
 				if fireCallback ~= false then
 					Creator.SafeCallback(Item.Callback, true)
+				end
+				return Item
+			end
+			if IsChoice then
+				local index = 1
+				for i, option in ipairs(Options) do
+					if option.Value == value then
+						index = i
+						break
+					end
+				end
+				local option = Options[index]
+				if option then
+					Item.Value = option.Value
+					ValueLabel.Text = OptionLabel(option, Localization.GetLanguage())
+				end
+				if Item.Flag then
+					Panel.Values[Item.Flag] = Item.Value
+				end
+				if fireCallback ~= false then
+					Creator.SafeCallback(Item.Callback, Item.Value)
 				end
 				return Item
 			end
@@ -33547,6 +34225,7 @@ function ProfilePanel.New(Window, Config, WindUI)
 
 		local Section = {
 			Title = SectionConfig.Title or "Раздел",
+			TitleKey = SectionConfig.TitleKey,
 			Expanded = SectionConfig.Expanded ~= false,
 			ContentHeight = 0,
 			Items = {},
@@ -33592,7 +34271,8 @@ function ProfilePanel.New(Window, Config, WindUI)
 				Name = "Title",
 				Size = UDim2.new(1, -44, 1, 0),
 				Position = UDim2.new(0, 14, 0, 0),
-				Text = string.upper(Section.Title),
+				Text = Section.TitleKey and Localization.Key(Section.TitleKey)
+					or string.upper(Section.Title),
 				TextSize = 12,
 				TextXAlignment = "Left",
 				TextTransparency = 0.2,
@@ -33705,6 +34385,132 @@ function ProfilePanel.New(Window, Config, WindUI)
 
 		self.Sections[#self.Sections + 1] = Section
 		return Section
+	end
+
+	------------------------------------------------------------------
+	-- Built-in settings (language, theme, loading, config autoload)
+	-- Everything here is clickable in the UI: no code editing required.
+	------------------------------------------------------------------
+	function self:AddSettings()
+		if self.SettingsAdded then
+			return self.SettingsSection
+		end
+		self.SettingsAdded = true
+
+		local WindUI = self.WindUI
+		local Section = self:AddSection({
+			Title = Localization.Get("settings"),
+			TitleKey = "settings",
+			Icon = "settings",
+			Expanded = true,
+		})
+
+		Section:AddItem({
+			Type = "Choice",
+			Title = Localization.Get("language"),
+			TitleKey = "language",
+			Flag = "ReworkLanguage",
+			Options = {
+				{ Value = "ru", LabelKey = "language.ru" },
+				{ Value = "en", LabelKey = "language.en" },
+			},
+			Default = Localization.GetLanguage(),
+			Callback = function(value)
+				Localization.SetLanguage(WindUI, value)
+			end,
+		})
+
+		Section:AddItem({
+			Type = "Choice",
+			Title = Localization.Get("theme"),
+			TitleKey = "theme",
+			Flag = "ReworkTheme",
+			Options = {
+				{ Value = "Dark", LabelKey = "theme.dark" },
+				{ Value = "Light", LabelKey = "theme.light" },
+			},
+			Default = (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()) or "Dark",
+			Callback = function(value)
+				if WindUI.SetTheme then
+					WindUI:SetTheme(value)
+				end
+			end,
+		})
+
+		Section:AddItem({
+			Type = "Toggle",
+			Title = Localization.Get("loading"),
+			TitleKey = "loading",
+			Flag = "ReworkLoading",
+			Default = WindUI.LoadingEnabled == true,
+			Callback = function(value)
+				if WindUI.SetLoadingEnabled then
+					WindUI:SetLoadingEnabled(value)
+				end
+				if Window.Settings then
+					Window.Settings.Loading = value
+				end
+			end,
+		})
+
+		Section:AddItem({
+			Type = "Toggle",
+			Title = Localization.Get("autoload"),
+			TitleKey = "autoload",
+			Flag = "ReworkAutoLoad",
+			Default = Config.AutoLoad ~= false,
+			Callback = function(value)
+				Config.AutoLoad = value == true
+				if self.ConfigModule and self.ConfigModule.SetAutoLoad then
+					pcall(function()
+						self.ConfigModule:SetAutoLoad(value)
+					end)
+				end
+			end,
+		})
+
+		self.SettingsSection = Section
+		return Section
+	end
+
+	function self:RefreshLanguage(language)
+		local lang = language or Localization.GetLanguage()
+		for _, section in ipairs(self.Sections) do
+			if section.TitleKey then
+				section.Title = Localization.Get(section.TitleKey, lang)
+			end
+		end
+		for _, item in ipairs(self.Items) do
+			if item.Type == "Choice" then
+				item:Set(item.Value, false)
+			end
+		end
+		return self
+	end
+
+	self.LanguageUnsubscribe = Localization.OnChange(function(language)
+		if not self.Destroyed then
+			self:RefreshLanguage(language)
+		end
+	end)
+
+	-- Public convenience API (the UI rows call these too).
+	function self:SetLanguage(language)
+		return Localization.SetLanguage(self.WindUI, language)
+	end
+
+	function self:SetTheme(name)
+		if self.WindUI.SetTheme then
+			self.WindUI:SetTheme(name)
+		end
+		return self
+	end
+
+	function self:SetLoadingEnabled(value)
+		if self.WindUI.SetLoadingEnabled then
+			self.WindUI:SetLoadingEnabled(value)
+		end
+		return self
 	end
 
 	------------------------------------------------------------------
@@ -33860,6 +34666,10 @@ function ProfilePanel.New(Window, Config, WindUI)
 		end
 		self.Destroyed = true
 		self.Opened = false
+		if self.LanguageUnsubscribe then
+			pcall(self.LanguageUnsubscribe)
+			self.LanguageUnsubscribe = nil
+		end
 		if self.StaggerHandle then
 			self.StaggerHandle:Cancel()
 		end
@@ -34788,6 +35598,7 @@ local cloneref = (cloneref or clonereference or function(instance) return instan
 
 local RunService = cloneref(game:GetService("RunService"))
 local HttpService = cloneref(game:GetService("HttpService"))
+local Creator = __WINDUI_REQUIRE("src/modules/Creator.lua")
 
 local Window 
 
@@ -34799,28 +35610,60 @@ ConfigManager = {
     Parser = {
         Colorpicker = {
             Save = function(obj)
+                -- Rework: `Default` holds the CURRENT colour (Update writes
+                -- it back). Guard the type and keep transparency = 0.
+                local color = obj.Default
+                if typeof(color) ~= "Color3" then
+                    color = Color3.new(1, 1, 1)
+                end
+                local transparency = obj.Transparency
+                if transparency == nil and obj.GetTransparency then
+                    transparency = obj:GetTransparency()
+                end
                 return {
                     __type = obj.__type,
-                    value = obj.Default:ToHex(),
-                    transparency = obj.Transparency or nil,
+                    value = color:ToHex(),
+                    transparency = transparency,
                 }
             end,
             Load = function(element, data)
                 if element and element.Update then
-                    element:Update(Color3.fromHex(data.value), data.transparency or nil)
+                    local hex = tostring(data.value or "FFFFFF"):gsub("^#", "")
+                    -- Color3.fromHex REQUIRES the leading '#'; upstream passed
+                    -- the bare hex string and threw for every saved colour.
+                    local ok, color = pcall(function()
+                        return Color3.fromHex("#" .. hex)
+                    end)
+                    if ok then
+                        element:Update(color, data.transparency, true)
+                    end
                 end
             end
         },
         Dropdown = {
             Save = function(obj)
+                -- Rework: read the live value (dropdowns keep it in
+                -- `Value`, not in `Default`). `0`/false stay valid.
+                local value = obj.Value
+                if value == nil and obj.GetValue then
+                    value = obj:GetValue()
+                end
+                if value ~= nil and typeof(value) == "table" then
+                    local copy = {}
+                    for key, item in pairs(value) do
+                        copy[key] = typeof(item) == "table" and (item.Title or item[1]) or item
+                    end
+                    value = copy
+                end
                 return {
                     __type = obj.__type,
-                    value = obj.Value,
+                    value = value,
                 }
             end,
             Load = function(element, data)
                 if element and element.Select then
-                    element:Select(data.value)
+                    -- silent = true -> no duplicate Callback on load
+                    element:Select(data.value, true)
                 end
             end
         },
@@ -34833,7 +35676,7 @@ ConfigManager = {
             end,
             Load = function(element, data)
                 if element and element.Set then
-                    element:Set(data.value)
+                    element:Set(data.value, false)
                 end
             end
         },
@@ -34871,8 +35714,9 @@ ConfigManager = {
                     if value == nil then
                         value = 0
                     end
-                    -- force = true -> a saved 0 is applied and the callback runs.
-                    element:Set(value, nil, true)
+                    -- force = true -> a saved 0 is applied; silent = true
+                    -- -> no duplicate Callback while loading a config.
+                    element:Set(value, nil, true, true)
                 end
             end
         },
@@ -34885,7 +35729,22 @@ ConfigManager = {
             end,
             Load = function(element, data)
                 if element and element.Set then
-                    element:Set(data.value)
+                    -- isCallback = false -> no duplicate Callback
+                    element:Set(data.value, false)
+                end
+            end
+        },
+        -- Rework: profile-panel Choice rows (language / theme selector).
+        Choice = {
+            Save = function(obj)
+                return {
+                    __type = obj.__type,
+                    value = obj.Value,
+                }
+            end,
+            Load = function(element, data)
+                if element and element.Set then
+                    element:Set(data.value, false)
                 end
             end
         },
@@ -34963,6 +35822,33 @@ function ConfigManager:CreateConfig(configFilename, autoload)
     function ConfigModule:Register(Name, Element)
         ConfigModule.Elements[Name] = Element
     end
+
+    -- Rework (bug 1): a Flag can be assigned AFTER the element was created,
+    -- or a config can be created before the tabs are built. Rescan the
+    -- window's element list on every Save/Load instead of trusting the
+    -- registration order.
+    function ConfigModule:RegisterAll()
+        if Window and Window.PendingFlags then
+            for flag, element in pairs(Window.PendingFlags) do
+                ConfigModule.Elements[flag] = element
+            end
+        end
+        if Window and Window.AllElements then
+            for _, element in pairs(Window.AllElements) do
+                if typeof(element) == "table" and element.Flag ~= nil then
+                    ConfigModule.Elements[tostring(element.Flag)] = element
+                end
+            end
+        end
+        return ConfigModule
+    end
+
+    function ConfigModule:RegisterFlag(flag, element)
+        if flag ~= nil and typeof(element) == "table" then
+            ConfigModule.Elements[tostring(flag)] = element
+        end
+        return ConfigModule
+    end
     
     function ConfigModule:Set(key, value)
         ConfigModule.CustomData[key] = value
@@ -34977,11 +35863,7 @@ function ConfigManager:CreateConfig(configFilename, autoload)
     end
     
     function ConfigModule:Save()
-        if Window.PendingFlags then
-            for flag, element in next, Window.PendingFlags do
-                ConfigModule:Register(flag, element)
-            end
-        end
+        ConfigModule:RegisterAll()
         
         local saveData = {
             __version = ConfigModule.Version,
@@ -35030,19 +35912,20 @@ function ConfigManager:CreateConfig(configFilename, autoload)
             loadData = migratedData
         end
         
-        if Window.PendingFlags then
-            for flag, element in next, Window.PendingFlags do
-                ConfigModule:Register(flag, element)
+        ConfigModule:RegisterAll()
+
+        -- Rework (bug 1): apply synchronously inside a suppressed-callback
+        -- block. Upstream used task.spawn for every value, so callbacks
+        -- fired *after* loading finished (and were effectively duplicated).
+        Creator.SuspendCallbacks(function()
+            for name, data in next, (loadData.__elements or {}) do
+                local element = ConfigModule.Elements[name]
+                local parser = ConfigManager.Parser[data.__type]
+                if element and parser then
+                    pcall(parser.Load, element, data)
+                end
             end
-        end
-        
-        for name, data in next, (loadData.__elements or {}) do
-            if ConfigModule.Elements[name] and ConfigManager.Parser[data.__type] then
-                task.spawn(function()
-                    ConfigManager.Parser[data.__type].Load(ConfigModule.Elements[name], data)
-                end)
-            end
-        end
+        end)
         
         ConfigModule.CustomData = loadData.__custom or {}
         
@@ -35120,7 +36003,9 @@ function ConfigManager:GetAutoLoadConfigs()
     local autoloadConfigs = {}
     
     for configName, configModule in pairs(ConfigManager.Configs) do
-        if configModule.AutoLoad then
+        -- Rework: Init() prefetches existing files as plain JSON strings.
+        -- Indexing `.AutoLoad` on a string used to be a latent crash.
+        if typeof(configModule) == "table" and configModule.AutoLoad then
             table.insert(autoloadConfigs, configName)
         end
     end
@@ -36400,6 +37285,7 @@ function Element:New(Config)
 	Dropdown.Display = Dropdown.DropdownMenu.Display
 	Dropdown.Refresh = Dropdown.DropdownMenu.Refresh
 	Dropdown.Select = Dropdown.DropdownMenu.Select
+	Dropdown.SetValues = Dropdown.DropdownMenu.SetValues
 	Dropdown.Open = Dropdown.DropdownMenu.Open
 	Dropdown.Close = Dropdown.DropdownMenu.Close
 
@@ -36428,6 +37314,27 @@ function Element:New(Config)
 	function Dropdown:Unlock()
 		Dropdown.Locked = false
 		return Dropdown.DropdownFrame:Unlock()
+	end
+
+	-- Rework (bug 3/8): replace options at runtime and release connections.
+	function Dropdown:SetValues(Values)
+		if Dropdown.DropdownMenu.SetValues then
+			Dropdown.DropdownMenu:SetValues(Values, true)
+		end
+		return Dropdown
+	end
+
+	function Dropdown:Destroy()
+		if Dropdown.DropdownMenu.Destroy then
+			pcall(function()
+				Dropdown.DropdownMenu:Destroy()
+			end)
+		end
+		if Dropdown.DropdownFrame and Dropdown.DropdownFrame.Destroy then
+			pcall(function()
+				Dropdown.DropdownFrame:Destroy()
+			end)
+		end
 	end
 
 	if Dropdown.Locked then
@@ -37998,6 +38905,7 @@ function Element:New(Config)
 		Slider.IsTextbox = Slider.IsTextbox ~= false
 	end
 
+	local SliderGroup = "slider_" .. tostring(Slider)
 	local Holding = false
 	local HasAppliedOnce = false
 	local CanCallback = true
@@ -38176,14 +39084,16 @@ function Element:New(Config)
 		Slider.Value.Default = FormatValue(newValue)
 	end
 
-	local function ApplyValue(newValue, time, force)
+	local function ApplyValue(newValue, time, force, silent)
 		local changed = (newValue ~= LastValue)
 		if force or changed or not HasAppliedOnce then
 			HasAppliedOnce = true
 			Value = newValue
 			LastValue = newValue
 			UpdateVisual(newValue, time)
-			Creator.SafeCallback(Slider.Callback, FormatValue(newValue))
+			if not silent then
+				Creator.SafeCallback(Slider.Callback, FormatValue(newValue))
+			end
 		end
 	end
 
@@ -38252,7 +39162,7 @@ function Element:New(Config)
 	------------------------------------------------------------------
 	-- 5. Public API
 	------------------------------------------------------------------
-	function Slider:Set(newValue, input, force)
+	function Slider:Set(newValue, input, force, silent)
 		if not CanCallback and not force then
 			return Slider
 		end
@@ -38315,8 +39225,9 @@ function Element:New(Config)
 			local value = CalculateValue(ToNumber(newValue, LastValue))
 			-- Programmatic :Set() is always an explicit action: fire the
 			-- callback even when the value is unchanged (this is the `Set(0)`
-			-- case that upstream silently swallowed).
-			ApplyValue(value, "Fast", true)
+			-- case that upstream silently swallowed). `silent` is used by
+			-- ConfigManager when applying saved values.
+			ApplyValue(value, "Fast", true, silent == true)
 		end
 		return Slider
 	end
@@ -38369,20 +39280,44 @@ function Element:New(Config)
 		return Slider
 	end
 
+	-- Rework (bug 4): `Locked` alone is not enough. A transparent Frame
+	-- with Active = true still receives InputBegan, so a locked slider
+	-- could still be dragged. Toggle Active on every hit surface.
+	local function SetActive(active)
+		pcall(function()
+			Slider.UIElements.SliderContainer.Active = active
+		end)
+		pcall(function()
+			Slider.SliderFrame.UIElements.Main.Active = active
+		end)
+		pcall(function()
+			Slider.UIElements.SliderIcon.Active = active
+		end)
+		if Slider.UIElements.SliderContainer.TextBox then
+			pcall(function()
+				Slider.UIElements.SliderContainer.TextBox.TextEditable = active
+			end)
+		end
+	end
+
 	function Slider:Lock()
 		Slider.Locked = true
 		CanCallback = false
+		Release()
+		SetActive(false)
 		return Slider.SliderFrame:Lock(Slider.LockedTitle)
 	end
 
 	function Slider:Unlock()
 		Slider.Locked = false
 		CanCallback = true
+		SetActive(true)
 		return Slider.SliderFrame:Unlock()
 	end
 
 	function Slider:Destroy()
 		Release()
+		Creator.DisconnectGroup("slider_" .. tostring(Slider))
 		if Slider.SliderFrame and Slider.SliderFrame.Destroy then
 			pcall(function()
 				Slider.SliderFrame:Destroy()
@@ -38392,15 +39327,17 @@ function Element:New(Config)
 
 	if Slider.Locked then
 		Slider:Lock()
+	else
+		SetActive(true)
 	end
 
 	------------------------------------------------------------------
 	-- 6. Input
 	------------------------------------------------------------------
-	Creator.AddSignal(TextBox.Focused, function()
+	Creator.AddScopedSignal(SliderGroup, TextBox.Focused, function()
 		Slider.IsFocusing = true
 	end)
-	Creator.AddSignal(TextBox.FocusLost, function()
+	Creator.AddScopedSignal(SliderGroup, TextBox.FocusLost, function()
 		Slider.IsFocusing = false
 		local newValue = ToNumber(TextBox.Text, nil)
 		if newValue ~= nil then
@@ -38415,12 +39352,12 @@ function Element:New(Config)
 		end
 	end)
 
-	Creator.AddSignal(Slider.UIElements.SliderContainer.MouseEnter, function()
+	Creator.AddScopedSignal(SliderGroup, Slider.UIElements.SliderContainer.MouseEnter, function()
 		if not Holding then
 			SetThumbSize(BigThumbSize, 0)
 		end
 	end)
-	Creator.AddSignal(Slider.UIElements.SliderContainer.MouseLeave, function()
+	Creator.AddScopedSignal(SliderGroup, Slider.UIElements.SliderContainer.MouseLeave, function()
 		if not Holding then
 			SetThumbSize(BaseThumbSize, 0)
 		end
@@ -38429,7 +39366,7 @@ function Element:New(Config)
 	local CurInput = Config.WindUI and Config.WindUI.GenerateGUID
 		and Config.WindUI.GenerateGUID() or tostring(Slider)
 
-	Creator.AddSignal(Slider.UIElements.SliderContainer.InputBegan, function(input)
+	Creator.AddScopedSignal(SliderGroup, Slider.UIElements.SliderContainer.InputBegan, function(input)
 		if Slider.Locked or Holding or IsSliderHolding then
 			return
 		end
@@ -39407,15 +40344,72 @@ function Creator.AddSignal(Signal, Function)
 	return conn
 end
 
+-- Rework: named connection groups so a Tab / element / window can be
+-- destroyed without killing connections owned by other objects.
+function Creator.AddScopedSignal(group, Signal, Function)
+	local conn = Signal:Connect(Function)
+	Creator.ScopedSignals = Creator.ScopedSignals or {}
+	Creator.ScopedSignals[group] = Creator.ScopedSignals[group] or {}
+	local bucket = Creator.ScopedSignals[group]
+	bucket[#bucket + 1] = conn
+	return conn
+end
+
+function Creator.DisconnectGroup(group)
+	local bucket = Creator.ScopedSignals and Creator.ScopedSignals[group]
+	if not bucket then
+		return 0
+	end
+	local count = 0
+	for index = #bucket, 1, -1 do
+		local conn = bucket[index]
+		bucket[index] = nil
+		if conn then
+			pcall(function()
+				conn:Disconnect()
+			end)
+			count += 1
+		end
+	end
+	Creator.ScopedSignals[group] = nil
+	return count
+end
+
+-- Rework: the upstream loop used `next` while removing from the same
+-- table, so every second connection survived and leaked forever.
 function Creator.DisconnectAll()
-	for idx, signal in next, Creator.Signals do
-		local Connection = table.remove(Creator.Signals, idx)
-		Connection:Disconnect()
+	for index = #Creator.Signals, 1, -1 do
+		local conn = Creator.Signals[index]
+		Creator.Signals[index] = nil
+		if conn then
+			pcall(function()
+				conn:Disconnect()
+			end)
+		end
+	end
+	if Creator.ScopedSignals then
+		for group in pairs(Creator.ScopedSignals) do
+			Creator.DisconnectGroup(group)
+		end
 	end
 end
 
+-- Rework: config loading must apply saved values WITHOUT firing user
+-- callbacks a second time. `SuspendCallbacks` wraps the whole load.
+Creator.CallbackSuppressDepth = 0
+
+function Creator.SuspendCallbacks(fn, ...)
+	Creator.CallbackSuppressDepth += 1
+	local results = table.pack(pcall(fn, ...))
+	Creator.CallbackSuppressDepth = math.max(0, Creator.CallbackSuppressDepth - 1)
+	if not results[1] then
+		warn("[ WindUI ] Suppressed callback block failed: " .. tostring(results[2]))
+	end
+	return table.unpack(results, 2)
+end
+
 function Creator.SafeCallback(Function, ...)
-	if not Function then
+	if not Function or Creator.CallbackSuppressDepth > 0 then
 		return
 	end
 
@@ -39740,7 +40734,9 @@ function Creator.UpdateLang(newLang)
 
 	for i = 1, #Creator.LocalizationObjects do
 		local data = Creator.LocalizationObjects[i]
-		if data.Object and data.Object.Parent ~= nil then
+		-- Rework: removing an entry during a previous pass leaves a hole;
+		-- indexing `data.Object` on nil used to crash SetLanguage().
+		if data and data.Object and data.Object.Parent ~= nil then
 			Creator.SetLangForObject(i)
 		else
 			Creator.LocalizationObjects[i] = nil
@@ -39782,7 +40778,10 @@ function Creator.New(Name, Properties, Children)
 		if Name ~= "ThemeTag" then
 			Object[Name] = Value
 		end
-		if Creator.Localization and Creator.Localization.Enabled and Name == "Text" then
+		-- Rework: `Text` is not always a string; string.match() used to
+		-- throw as soon as localization was enabled.
+		if Creator.Localization and Creator.Localization.Enabled and Name == "Text"
+			and typeof(Value) == "string" then
 			local TranslationId = string.match(Value, "^" .. Creator.Localization.Prefix .. "(.+)")
 			if TranslationId then
 				local currentId = #Creator.LocalizationObjects + 1
@@ -39899,33 +40898,65 @@ function Creator.Drag(mainFrame, dragFrames, ondrag)
 	local dragging = false
 	local dragStart, startPos
 	local activeInput = nil
+	local connections = {}
 
 	local DragModule = {
 		CanDraggable = true,
+		Destroyed = false,
 	}
 
 	if not dragFrames or typeof(dragFrames) ~= "table" then
 		dragFrames = { mainFrame }
 	end
 
+	local function track(signal, fn)
+		local conn = signal:Connect(fn)
+		connections[#connections + 1] = conn
+		return conn
+	end
+
+	-- Rework (bug 6): AbsolutePosition is measured in the ScreenGui's
+	-- coordinate space; GuiService:GetGuiInset() is the difference to the
+	-- pointer's screen space. Ignoring it is what broke dragging on phones.
+	local function ClampToViewport(position)
+		local ok, result = pcall(function()
+			local camera = workspace.CurrentCamera
+			local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+			local inset = cloneref(game:GetService("GuiService")):GetGuiInset()
+			local size = mainFrame.AbsoluteSize
+			local halfX = (size.X > 0 and size.X / 2 or 200)
+			local halfY = (size.Y > 0 and size.Y / 2 or 150)
+			local minX = -viewport.X / 2 + halfX
+			local maxX = viewport.X / 2 - halfX
+			local minY = -viewport.Y / 2 + halfY + inset.Y
+			local maxY = viewport.Y / 2 - halfY
+			return UDim2.new(
+				0.5,
+				math.clamp(position.X.Offset, minX, maxX),
+				0.5,
+				math.clamp(position.Y.Offset, minY, maxY)
+			)
+		end)
+		return ok and result or position
+	end
+
 	local function update(input)
-		if not dragging or not DragModule.CanDraggable then
+		if not dragging or not DragModule.CanDraggable or DragModule.Destroyed then
 			return
 		end
 
 		local delta = input.Position - dragStart
-		Creator.Tween(mainFrame, 0.02, {
-			Position = UDim2.new(
-				startPos.X.Scale,
-				startPos.X.Offset + delta.X,
-				startPos.Y.Scale,
-				startPos.Y.Offset + delta.Y
-			),
-		}):Play()
+		local target = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
+		Creator.Tween(mainFrame, 0.02, { Position = ClampToViewport(target) }):Play()
 	end
 
 	for _, dragFrame in pairs(dragFrames) do
-		dragFrame.InputBegan:Connect(function(input)
+		track(dragFrame.InputBegan, function(input)
 			if not DragModule.CanDraggable or dragging then
 				return
 			end
@@ -39953,7 +40984,7 @@ function Creator.Drag(mainFrame, dragFrames, ondrag)
 		end)
 	end
 
-	UserInputService.InputChanged:Connect(function(input)
+	track(UserInputService.InputChanged, function(input)
 		if not dragging then
 			return
 		end
@@ -39972,7 +41003,7 @@ function Creator.Drag(mainFrame, dragFrames, ondrag)
 		end
 	end)
 
-	UserInputService.InputEnded:Connect(function(input)
+	track(UserInputService.InputEnded, function(input)
 		if not dragging or WindUI.CurrentInput ~= CurInput then
 			return
 		end
@@ -39996,7 +41027,29 @@ function Creator.Drag(mainFrame, dragFrames, ondrag)
 	end)
 
 	function DragModule:Set(v)
-		DragModule.CanDraggable = v
+		DragModule.CanDraggable = v == true
+	end
+
+	-- Rework (bug 8): all UIS / GuiObject connections must be released.
+	function DragModule:Destroy()
+		if DragModule.Destroyed then
+			return
+		end
+		DragModule.Destroyed = true
+		dragging = false
+		activeInput = nil
+		if WindUI.CurrentInput == CurInput then
+			WindUI.CurrentInput = nil
+		end
+		for _, conn in ipairs(connections) do
+			pcall(function()
+				conn:Disconnect()
+			end)
+		end
+		table.clear(connections)
+		if ondrag and typeof(ondrag) == "function" then
+			pcall(ondrag, false, nil)
+		end
 	end
 
 	return DragModule
@@ -40780,6 +41833,228 @@ end
 return Localization
 end
 
+__WINDUI_MODULES["src/modules/ReworkLocalization.lua"] = function()
+--[[
+    WindUI Rework / ReworkLocalization
+    ------------------------------------------------------------------
+    Built-in RU / EN translations for the rework UI (profile panel,
+    settings rows, Key System dialog and the loading screen).
+
+    It plugs into the *existing* WindUI localization API instead of
+    inventing a second one:
+
+        WindUI:Localization({ Translations = { ru = {...}, en = {...} } })
+        WindUI:SetLanguage("ru" | "en")
+
+    `Creator.New` automatically registers every `Text = "loc:<key>"`
+    property, so changing the language updates every already-created
+    label. User translations are merged, never overwritten.
+
+    API (module level):
+        Install(WindUI, language?)   -> enable + merge, idempotent
+        Key(name)                    -> "loc:rework.<name>"
+        Get(name, language?)         -> resolved plain string
+        SetLanguage(WindUI, lang)    -> switch + notify subscribers
+        GetLanguage()                -> "ru" | "en"
+        OnChange(callback)           -> returns an unsubscribe function
+        Languages()                  -> { "ru", "en" }
+]]
+
+local Localization = {}
+
+local PREFIX = "rework."
+local LANGUAGES = { "ru", "en" }
+
+local Translations = {
+	ru = {
+		["settings"] = "Настройки",
+		["language"] = "Язык / Language",
+		["language.ru"] = "Русский",
+		["language.en"] = "English",
+		["theme"] = "Тема оформления",
+		["theme.dark"] = "Тёмная",
+		["theme.light"] = "Светлая",
+		["loading"] = "Экран загрузки",
+		["autoload"] = "Загружать настройки",
+		["keysystem"] = "Ключ / Key System",
+		["keysystem.title"] = "Key System",
+		["keysystem.enter"] = "Введите ключ",
+		["keysystem.get"] = "Get Key",
+		["keysystem.check"] = "Check Key",
+		["keysystem.exit"] = "Выход",
+		["keysystem.invalid"] = "Неверный ключ.",
+		["keysystem.copied"] = "Ссылка на ключ скопирована.",
+		["loading.title"] = "Загрузка",
+		["loading.status"] = "Подготовка интерфейса…",
+		["loading.ready"] = "Готово",
+		["profile.title"] = "Профиль",
+		["profile.subtitle"] = "Настройки WindUI",
+		["profile.config"] = "Конфиг",
+		["profile.save"] = "Сохранить",
+		["profile.load"] = "Загрузить",
+		["profile.close"] = "Закрыть",
+		["combat"] = "Комбат",
+		["visuals"] = "Визуалы",
+		["silentaim"] = "Сайлент аим",
+		["aimbot"] = "Аимбот",
+		["triggerbot"] = "Триггербот",
+		["killall"] = "Kill All",
+		["esp"] = "ESP",
+		["espbox"] = "ESP Box",
+		["espskeleton"] = "ESP Skeleton",
+		["open"] = "Открыть",
+		["close"] = "Закрыть",
+	},
+	en = {
+		["settings"] = "Settings",
+		["language"] = "Language / Язык",
+		["language.ru"] = "Русский",
+		["language.en"] = "English",
+		["theme"] = "Theme",
+		["theme.dark"] = "Dark",
+		["theme.light"] = "Light",
+		["loading"] = "Loading screen",
+		["autoload"] = "Load saved settings",
+		["keysystem"] = "Key System",
+		["keysystem.title"] = "Key System",
+		["keysystem.enter"] = "Enter key",
+		["keysystem.get"] = "Get Key",
+		["keysystem.check"] = "Check Key",
+		["keysystem.exit"] = "Exit",
+		["keysystem.invalid"] = "Invalid key.",
+		["keysystem.copied"] = "Key link copied to clipboard.",
+		["loading.title"] = "Loading",
+		["loading.status"] = "Preparing interface…",
+		["loading.ready"] = "Ready",
+		["profile.title"] = "Profile",
+		["profile.subtitle"] = "WindUI settings",
+		["profile.config"] = "Config",
+		["profile.save"] = "Save",
+		["profile.load"] = "Load",
+		["profile.close"] = "Close",
+		["combat"] = "Combat",
+		["visuals"] = "Visuals",
+		["silentaim"] = "Silent Aim",
+		["aimbot"] = "Aimbot",
+		["triggerbot"] = "TriggerBot",
+		["killall"] = "Kill All",
+		["esp"] = "ESP",
+		["espbox"] = "ESP Box",
+		["espskeleton"] = "ESP Skeleton",
+		["open"] = "Open",
+		["close"] = "Close",
+	},
+}
+
+local CurrentLanguage = "ru"
+local Subscribers = {}
+
+function Localization.Languages()
+	return table.clone(LANGUAGES)
+end
+
+function Localization.IsValid(language)
+	return language == "ru" or language == "en"
+end
+
+function Localization.Key(name)
+	return "loc:" .. PREFIX .. tostring(name)
+end
+
+function Localization.Get(name, language)
+	local lang = Localization.IsValid(language) and language or CurrentLanguage
+	local entry = Translations[lang] and Translations[lang][name]
+	if entry ~= nil then
+		return entry
+	end
+	return (Translations.en[name] ~= nil and Translations.en[name]) or tostring(name)
+end
+
+function Localization.GetLanguage()
+	return CurrentLanguage
+end
+
+function Localization.OnChange(callback)
+	if type(callback) ~= "function" then
+		return function() end
+	end
+	Subscribers[#Subscribers + 1] = callback
+	return function()
+		for index, subscriber in ipairs(Subscribers) do
+			if subscriber == callback then
+				table.remove(Subscribers, index)
+				break
+			end
+		end
+	end
+end
+
+--- Merge the built-in dictionary into whatever localization the user has
+--- already installed. Never replaces user-provided keys.
+function Localization.Install(WindUI, language)
+	if not WindUI or not WindUI.Creator then
+		return false
+	end
+
+	local Creator = WindUI.Creator
+	local existing = Creator.Localization
+	if type(existing) ~= "table" then
+		existing = WindUI:Localization({
+			Enabled = true,
+			Translations = {},
+			Prefix = "loc:",
+			DefaultLanguage = "ru",
+		})
+	end
+	if type(existing) ~= "table" then
+		return false
+	end
+
+	existing.Enabled = true
+	existing.Translations = existing.Translations or {}
+	for lang, dictionary in pairs(Translations) do
+		existing.Translations[lang] = existing.Translations[lang] or {}
+		for key, value in pairs(dictionary) do
+			existing.Translations[lang][PREFIX .. key] = value
+		end
+	end
+
+	if Localization.IsValid(language) then
+		CurrentLanguage = language
+	elseif Localization.IsValid(Creator.Language) then
+		CurrentLanguage = Creator.Language
+	end
+	WindUI:SetLanguage(CurrentLanguage)
+	WindUI.ReworkLanguage = CurrentLanguage
+	return true
+end
+
+--- Switch the whole library (and every rework label) to RU or EN.
+function Localization.SetLanguage(WindUI, language)
+	local lang = tostring(language or ""):lower()
+	if not Localization.IsValid(lang) then
+		return false, "Unsupported language (use 'ru' or 'en')"
+	end
+	CurrentLanguage = lang
+	-- Call Creator directly: WindUI:SetLanguage delegates back to this
+	-- function, so going through the public API would recurse forever.
+	local Creator = WindUI and WindUI.Creator
+	if Creator and Creator.SetLanguage then
+		Creator.SetLanguage(lang)
+		Creator.Language = lang
+	end
+	if WindUI then
+		WindUI.ReworkLanguage = lang
+	end
+	for _, callback in ipairs(Subscribers) do
+		pcall(callback, lang)
+	end
+	return true
+end
+
+return Localization
+end
+
 __WINDUI_MODULES["src/modules/SliderMath.lua"] = function()
 --[[
     WindUI Rework / SliderMath
@@ -40841,10 +42116,25 @@ function SliderMath.Normalise(Config)
 		Min = Min,
 		Max = Max,
 		Step = Step,
-		IsFloat = (Step % 1) ~= 0,
+		-- Rework (bug 4): fractional Min/Max count as float too, otherwise
+		-- a Step = 1 range starting at 0.5 was rounded to integers.
+		IsFloat = (Step % 1) ~= 0 or (Min % 1) ~= 0 or (Max % 1) ~= 0,
 		Default = ToNumber(rawDefault, Min),
 	}
 end
+
+-- Number of decimals needed to represent a step without float noise
+-- (0.1 + 0.2 = 0.30000000000000004 otherwise).
+local function Precision(step)
+	for decimals = 0, 6 do
+		local scaled = step * (10 ^ decimals)
+		if math.abs(scaled - math.floor(scaled + 0.5)) < 1e-9 then
+			return decimals
+		end
+	end
+	return 2
+end
+SliderMath.Precision = Precision
 
 function SliderMath.Range(range)
 	return math.max(range.Max - range.Min, 1e-9)
@@ -40856,15 +42146,24 @@ end
 
 function SliderMath.Format(value, range)
 	value = ToNumber(value, range.Min)
-	if range.IsFloat then
-		return ToNumber(string.format("%.2f", value), value)
+	-- Rework (bug 4): round only to the precision implied by Min/Max/Step
+	-- so `Step = 0.001` and `Min = 0.5` keep their decimals, while a plain
+	-- integer range still snaps to whole numbers.
+	local decimals = math.max(
+		Precision(range.Step or 1),
+		Precision(range.Min or 0),
+		Precision(range.Max or 0)
+	)
+	if decimals > 0 or range.IsFloat then
+		return ToNumber(string.format("%." .. decimals .. "f", value), value)
 	end
 	return math.floor(value + 0.5)
 end
 
 function SliderMath.Calculate(rawValue, range)
 	rawValue = ToNumber(rawValue, range.Min)
-	local snapped = range.Min + math.floor((rawValue - range.Min) / range.Step + 0.5) * range.Step
+	local step = (range.Step and range.Step > 0 and range.Step) or 1
+	local snapped = range.Min + math.floor((rawValue - range.Min) / step + 0.5) * step
 	return math.clamp(SliderMath.Format(snapped, range), range.Min, range.Max)
 end
 
@@ -40892,7 +42191,7 @@ function SliderMath.SetStep(range, newStep)
 		step = 1
 	end
 	range.Step = math.min(step, SliderMath.Range(range))
-	range.IsFloat = (range.Step % 1) ~= 0
+	range.IsFloat = (range.Step % 1) ~= 0 or (range.Min % 1) ~= 0 or (range.Max % 1) ~= 0
 	return range.Step
 end
 
@@ -40902,9 +42201,20 @@ end
 __WINDUI_MODULES["src/themes/Fallbacks.lua"] = function()
 return function(Creator)
 	return {
-		-- More soon!
-
+		-- Rework (bug 5): theme keys used by elements but missing from the
+		-- fallback table resolved to nil, so AddTheme()/custom themes never
+		-- coloured those objects.
 		Primary = "Icon",
+
+		Layer = "ElementBackground",
+		PlaceholderText = "Placeholder",
+		WindowShadowTransparency = 0.7,
+		AcrylicMain = "Background",
+		AcrylicBorder = "White",
+		AcrylicBorderTransparency = 0.85,
+		AcrylicGradient = "Accent",
+		AcrylicNoise = "White",
+		AcrylicNoiseTransparency = 0.95,
 
 		White = Color3.new(1, 1, 1),
 		Black = Color3.new(0, 0, 0),

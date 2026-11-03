@@ -25,6 +25,7 @@
 
 local Creator = require("../../modules/Creator")
 local Animations = require("../../modules/Animations")
+local Localization = require("../../modules/ReworkLocalization")
 local New = Creator.New
 
 local cloneref = (cloneref or clonereference or function(instance)
@@ -42,6 +43,8 @@ function OpenButton.New(Window)
 		StayVisible = false,
 		Draggable = true,
 		VisibleState = false,
+		WindowClosed = false,
+		DefaultTitle = Window.Title or "WindUI",
 	}
 
 	local Icon
@@ -328,6 +331,27 @@ function OpenButton.New(Window)
 		)
 	end
 
+	-- Rework: the button now has an explicit open/closed state. While the
+	-- window is open and `StayVisible` is on, it says "Close" and clicking
+	-- it really closes the menu (before it re-animated and looked broken).
+	function OpenButtonMain:SetOpenState(windowClosed)
+		local closed = windowClosed == true
+		if self.WindowClosed == closed then
+			return self
+		end
+		self.WindowClosed = closed
+		if self.StayVisible then
+			Title.Text = Localization.Key(closed and "open" or "close")
+		else
+			Title.Text = self.DefaultTitle or "WindUI"
+		end
+		return self
+	end
+
+	function OpenButtonMain:IsWindowOpen()
+		return not self.WindowClosed
+	end
+
 	function OpenButtonMain:ShouldShow()
 		if not self.Enabled or Window.Destroyed then
 			return false
@@ -349,6 +373,12 @@ function OpenButton.New(Window)
 		local token = VisibilityToken
 
 		if value == true then
+			-- Rework: never replay the "appear" animation when the button is
+			-- already on screen (Window:Open() used to call Visible(true)
+			-- every time, making the button flash/teleport).
+			if self.VisibleState and Container.Visible then
+				return self
+			end
 			self.VisibleState = true
 			Container.Size = UDim2.new(
 				0, math.max(Button.AbsoluteSize.X, 120),
@@ -369,6 +399,9 @@ function OpenButton.New(Window)
 				PulseHandle = Animations:Pulse(Button.UIStroke, "Transparency", 0.1, 0.45, 2.2)
 			end
 		else
+			if not self.VisibleState and not Container.Visible then
+				return self
+			end
 			self.VisibleState = false
 			if PulseHandle then
 				PulseHandle:Stop()
@@ -467,6 +500,10 @@ function OpenButton.New(Window)
 			self.OnlyMobile = false
 		end
 		self.StayVisible = Module.StayVisible == true
+		-- Refresh the label for the new StayVisible value.
+		local wasClosed = self.WindowClosed
+		self.WindowClosed = nil
+		self:SetOpenState(wasClosed)
 
 		if Module.Draggable ~= nil then
 			self.Draggable = Module.Draggable == true

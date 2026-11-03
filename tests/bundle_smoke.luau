@@ -451,6 +451,9 @@ local created, Window = pcall(function()
 		ToggleKey = "RightShift",
 		User = { Enabled = true },
 		OpenButton = { Enabled = true, Draggable = true },
+		Loading = { Enabled = true, Duration = 0.25 },
+		Settings = { Language = "ru" },
+		Theme = "Dark",
 		Profile = {
 			Config = "default",
 			Sections = {
@@ -543,7 +546,105 @@ end
 Window:SetToggleKey("F5")
 Window:SetOpenButtonEnabled(true)
 
+----------------------------------------------------------------------
+-- New rework features: settings panel, RU/EN, themes, loading, guards
+----------------------------------------------------------------------
+-- Bug 2: CreateWindow must never build a second window.
+local Again = WindUI:CreateWindow({ Title = "Second" })
+if Again ~= Window then
+	error("CreateWindow created a second window", 0)
+end
+
+if WindUI.LoadingScreen == nil or WindUI.LoadingScreen.Enabled ~= true then
+	error("Loading = { Enabled = true } did not create a loading screen", 0)
+end
+if WindUI.DisplayOrders.Loading <= WindUI.DisplayOrders.Dropdown then
+	error("DisplayOrder layering is wrong", 0)
+end
+if WindUI.ScreenGui.DisplayOrder ~= WindUI.DisplayOrders.Window then
+	error("Window ScreenGui DisplayOrder was not applied", 0)
+end
+WindUI:SetDisplayOrder("Window", 12)
+if WindUI.ScreenGui.DisplayOrder ~= 12 then
+	error("SetDisplayOrder did not apply", 0)
+end
+
+-- Settings section in the profile panel
+local SettingsSection = Panel:GetSection("Настройки")
+if not SettingsSection then
+	error("profile panel has no settings section", 0)
+end
+if not Panel:GetItem("ReworkLanguage") or not Panel:GetItem("ReworkTheme") then
+	error("RU/EN language or Dark/Light theme row is missing", 0)
+end
+if not Panel:GetItem("ReworkLoading") or not Panel:GetItem("ReworkAutoLoad") then
+	error("loading / autoload toggle is missing", 0)
+end
+
+-- Switching language from the UI (not from code)
+Panel:SetValue("ReworkLanguage", "en")
+if WindUI:GetLanguage() ~= "en" then
+	error("language row did not switch the library to EN", 0)
+end
+if Panel:GetValue("ReworkLanguage") ~= "en" then
+	error("language row value was not stored", 0)
+end
+WindUI:SetLanguage("ru")
+if WindUI:GetLanguage() ~= "ru" then
+	error("WindUI:SetLanguage('ru') failed", 0)
+end
+
+-- Switching theme from the UI
+Panel:SetValue("ReworkTheme", "Light")
+if WindUI:GetCurrentTheme() ~= "Light" then
+	error("theme row did not switch to Light", 0)
+end
+WindUI:SetTheme("Dark")
+if WindUI:GetCurrentTheme() ~= "Dark" then
+	error("WindUI:SetTheme('Dark') failed", 0)
+end
+
+-- Loading can be disabled both from the UI and from code
+Panel:SetValue("ReworkLoading", false)
+if WindUI.LoadingScreen.Enabled ~= false then
+	error("loading toggle did not disable the overlay", 0)
+end
+WindUI:SetLoadingEnabled(false)
+
+-- Bug 4: locked slider must not keep an Active hit surface.
+local LockedSlider = Tab:Slider({
+	Title = "Locked",
+	Value = { Min = 0, Max = 10, Default = 0 },
+	Locked = true,
+})
+if LockedSlider.UIElements.SliderContainer.Active ~= false then
+	error("locked slider still has Active = true", 0)
+end
+LockedSlider:Unlock()
+if LockedSlider.UIElements.SliderContainer.Active ~= true then
+	error("unlocked slider did not restore Active", 0)
+end
+
+-- Bug 3: options can be replaced at runtime.
+local Dropdown = Tab:Dropdown({
+	Title = "Options",
+	Values = { "One", "Two" },
+	Value = "One",
+	Callback = function() end,
+})
+Dropdown:SetValues({ "Alpha", "Beta", "Gamma" })
+if #Dropdown.Values ~= 3 then
+	error("Dropdown:SetValues did not update Values", 0)
+end
+
+-- Bug 8: DisconnectAll must actually clear the connection list.
+local before = #WindUI.Creator.Signals
+WindUI.Creator.DisconnectAll()
+if #WindUI.Creator.Signals ~= 0 then
+	error("DisconnectAll leaked connections", 0)
+end
+
 print(string.format(
-	"bundle_smoke: OK (WindUI v%s | window, zero sliders, profile panel, PC open button)",
+	"bundle_smoke: OK (WindUI v%s | window, zero sliders, profile panel, PC open button, settings RU/EN + themes + loading, guards)",
 	tostring(WindUI.Version)
 ))

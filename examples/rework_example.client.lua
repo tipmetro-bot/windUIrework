@@ -38,6 +38,19 @@ local Window = WindUI:CreateWindow({
 	-- Клавиша открытия/закрытия на ПК (строка, Enum.KeyCode или список)
 	ToggleKey = "RightShift",
 
+	-- Язык, тема и экран загрузки настраиваются из кода...
+	Theme = "Dark",
+	Language = "ru",                    -- "ru" | "en"
+	Loading = {                          -- или false / true
+		Enabled = true,
+		Duration = 1.1,
+		Title = "WindUI Rework",
+		Steps = { "Конфиг…", "Вкладки…", "Готово" },
+	},
+	-- ...а в панели профиля есть секция «Настройки», где RU/EN и
+	-- Dark/Light переключаются просто кликом. Settings = false её скрывает.
+	Settings = { Language = "ru" },
+
 	-- Профиль в нижнем левом углу сайдбара
 	User = {
 		Enabled = true,
