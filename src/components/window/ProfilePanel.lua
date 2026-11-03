@@ -121,19 +121,115 @@ local function OptionLabel(option, language)
 	return tostring(option.Label ~= nil and option.Label or option.Value)
 end
 
+--- WindUI ships many themes (Dark, Light, Rose, Plant, Red, Indigo, Sky,
+--- Violet, Amber, Emerald, Midnight, Crimson, Monokai Pro, Cotton Candy,
+--- Mellowsi, Rainbow). Build the list from the library itself instead of
+--- hard-coding Dark/Light, so custom AddTheme() entries show up too.
+local function ThemeKeyOf(WindUI, value)
+	if not WindUI or not WindUI.GetThemes then
+		return value
+	end
+	local themes = WindUI:GetThemes() or {}
+	if themes[value] then
+		return value
+	end
+	for key, theme in pairs(themes) do
+		if type(theme) == "table" and (theme.Name == value or key == value) then
+			return key
+		end
+	end
+	return value
+end
+
+local function BuildThemeOptions(WindUI)
+	local options = {}
+	local themes = WindUI and WindUI.GetThemes and WindUI:GetThemes() or nil
+	if type(themes) == "table" then
+		local names = {}
+		for key, theme in pairs(themes) do
+			if type(theme) == "table" then
+				names[#names + 1] = {
+					Value = key,
+					Label = tostring(theme.Name or key),
+				}
+			end
+		end
+		table.sort(names, function(a, b)
+			-- Dark / Light first, then alphabetical.
+			local rank = { Dark = 0, Light = 1 }
+			local ra, rb = rank[a.Value] or 2, rank[b.Value] or 2
+			if ra ~= rb then
+				return ra < rb
+			end
+			return a.Label < b.Label
+		end)
+		for _, entry in ipairs(names) do
+			options[#options + 1] = entry
+		end
+	end
+	if #options == 0 then
+		options = {
+			{ Value = "Dark", LabelKey = "theme.dark" },
+			{ Value = "Light", LabelKey = "theme.light" },
+		}
+	end
+	return options
+end
+
+local function NormalizeText(value)
+	return string.lower(tostring(value or ""))
+end
+
+-- A user-supplied section is usually written with the same Russian labels
+-- as the built-in ones ("Комбат", "Аимбот", …). Inherit the known
+-- translation keys so RU/EN switching also works for custom panels.
+local SECTION_TITLE_KEYS = {}
+local ITEM_TITLE_KEYS = {}
+do
+	local function remember(map, key, value)
+		if key and value then
+			map[NormalizeText(key)] = value
+		end
+	end
+	for _, section in ipairs(DEFAULT_SECTIONS) do
+		if section.TitleKey then
+			remember(SECTION_TITLE_KEYS, section.Title, section.TitleKey)
+			remember(SECTION_TITLE_KEYS, Localization.Get(section.TitleKey, "ru"), section.TitleKey)
+			remember(SECTION_TITLE_KEYS, Localization.Get(section.TitleKey, "en"), section.TitleKey)
+		end
+		for _, item in ipairs(section.Items or {}) do
+			if item.TitleKey then
+				remember(ITEM_TITLE_KEYS, item.Title, item.TitleKey)
+				remember(ITEM_TITLE_KEYS, Localization.Get(item.TitleKey, "ru"), item.TitleKey)
+				remember(ITEM_TITLE_KEYS, Localization.Get(item.TitleKey, "en"), item.TitleKey)
+			end
+		end
+	end
+end
+
 local function CopySections(sections)
 	local result = {}
 	for index, section in ipairs(sections or DEFAULT_SECTIONS) do
-		local copy = {
-			Title = section.Title,
-			Icon = section.Icon,
-			Expanded = section.Expanded ~= false,
-			Items = {},
-		}
+		-- Copy EVERY key (TitleKey in particular). Dropping it made the
+		-- default Комбат / Визуалы sections stay Russian after RU -> EN.
+		local copy = {}
+		for key, value in next, section do
+			if key ~= "Items" then
+				copy[key] = value
+			end
+		end
+		copy.Expanded = section.Expanded ~= false
+		copy.Items = {}
+		if not copy.TitleKey and copy.Title then
+			copy.TitleKey = SECTION_TITLE_KEYS[NormalizeText(copy.Title)]
+		end
 		for itemIndex, item in ipairs(section.Items or {}) do
 			local itemCopy = {}
 			for key, value in next, item do
 				itemCopy[key] = value
+			end
+			if not itemCopy.TitleKey and itemCopy.Title then
+				itemCopy.TitleKey = ITEM_TITLE_KEYS[NormalizeText(itemCopy.Title)]
 			end
 			copy.Items[itemIndex] = itemCopy
 		end
@@ -593,6 +689,123 @@ function ProfilePanel.New(Window, Config, WindUI)
 	end
 
 	------------------------------------------------------------------
+	-- Choice popup: a real scrollable list for selectors with many
+	-- options (all WindUI themes). Two-option rows keep the one-tap
+	-- toggle -- perfect for RU / EN.
+	------------------------------------------------------------------
+	local ChoicePopup = New("CanvasGroup", {
+		Name = "ChoicePopup",
+		Parent = Holder,
+		Size = UDim2.new(0, 196, 0, 200),
+		BackgroundTransparency = 1,
+		GroupTransparency = 0,
+		Visible = false,
+		ZIndex = 260,
+	}, {
+		Creator.NewRoundFrame(10, "Squircle", {
+			Name = "Background",
+			Size = UDim2.new(1, 0, 1, 0),
+			ImageTransparency = 0.02,
+			ZIndex = 260,
+			ThemeTag = { ImageColor3 = "WindowBackground" },
+		}),
+		Creator.NewRoundFrame(10, "SquircleOutline", {
+			Name = "Outline",
+			Size = UDim2.new(1, 0, 1, 0),
+			ImageTransparency = 0.75,
+			ZIndex = 261,
+			ThemeTag = { ImageColor3 = "Text" },
+		}),
+	})
+
+	local ChoiceList = New("ScrollingFrame", {
+		Name = "List",
+		Parent = ChoicePopup,
+		Size = UDim2.new(1, -8, 1, -8),
+		Position = UDim2.new(0, 4, 0, 4),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 2,
+		ScrollBarImageTransparency = 0.6,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		ZIndex = 262,
+	}, {
+		New("UIListLayout", {
+			Name = "Layout",
+			Padding = UDim.new(0, 2),
+			SortOrder = "LayoutOrder",
+		}),
+	})
+
+	-- Exposed for tests / advanced users (and for outside-click handling).
+	self.UIElements.ChoicePopup = ChoicePopup
+	self.UIElements.ChoiceList = ChoiceList
+
+	local ChoicePopupGroup = "ProfilePanelChoicePopup"
+	local ChoicePopupItem = nil
+
+	local function CloseChoicePopup()
+		ChoicePopup.Visible = false
+		ChoicePopupItem = nil
+		Creator.DisconnectGroup(ChoicePopupGroup)
+	end
+
+	local function ShowChoicePopup(Item, Row)
+		if ChoicePopupItem == Item and ChoicePopup.Visible then
+			CloseChoicePopup()
+			return
+		end
+		CloseChoicePopup()
+		ChoicePopupItem = Item
+
+		for _, child in ipairs(ChoiceList:GetChildren()) do
+			if child.Name ~= "Layout" then
+				pcall(function()
+					child:Destroy()
+				end)
+			end
+		end
+
+		local rowHeight = 28
+		for index, option in ipairs(Item.Options) do
+			local OptionButton = New("TextButton", {
+				Name = "Option" .. tostring(index),
+				Parent = ChoiceList,
+				Size = UDim2.new(1, -4, 0, rowHeight - 2),
+				LayoutOrder = index,
+				BackgroundTransparency = option.Value == Item.Value and 0.72 or 0.94,
+				BackgroundColor3 = ACCENT,
+				Text = OptionLabel(option, Localization.GetLanguage()),
+				TextSize = 12,
+				TextXAlignment = "Left",
+				TextTruncate = "AtEnd",
+				ZIndex = 263,
+				ThemeTag = { TextColor3 = "Text" },
+			}, {
+				New("UIPadding", { PaddingLeft = UDim.new(0, 8) }),
+				New("UICorner", { CornerRadius = UDim.new(0, 6) }),
+			})
+			local function Pick()
+				Item:Set(option.Value, true)
+				CloseChoicePopup()
+			end
+			Creator.AddScopedSignal(ChoicePopupGroup, OptionButton.Activated, Pick)
+			Creator.AddScopedSignal(ChoicePopupGroup, OptionButton.MouseButton1Click, Pick)
+		end
+
+		ChoiceList.CanvasSize = UDim2.new(0, 0, 0, #Item.Options * rowHeight + 4)
+		ChoicePopup.Size = UDim2.new(0, 196, 0, math.min(#Item.Options * rowHeight + 8, 232))
+
+		local rowPos = Row.AbsolutePosition or { X = 0, Y = 0 }
+		local holderPos = Holder.AbsolutePosition or { X = 0, Y = 0 }
+		local holderWidth = (Holder.AbsoluteSize and Holder.AbsoluteSize.X) or 300
+		local x = math.max(8, math.min(rowPos.X - holderPos.X, holderWidth - 204))
+		local y = math.max(8, (rowPos.Y - holderPos.Y) - ChoicePopup.Size.Y.Offset / 2)
+		ChoicePopup.Position = UDim2.new(0, x, 0, y)
+		ChoicePopup.Visible = true
+	end
+
+	------------------------------------------------------------------
 	-- Item row factory
 	------------------------------------------------------------------
 	local function CreateItem(Section, ItemConfig)
@@ -730,6 +943,12 @@ function ProfilePanel.New(Window, Config, WindUI)
 				end
 			end)
 			if IsChoice then
+				if #Options > 2 then
+					-- 3+ options (e.g. the full WindUI theme list):
+					-- opening a list beats clicking 16 times to cycle.
+					ShowChoicePopup(Item, Row)
+					return
+				end
 				local index = 1
 				for i, option in ipairs(Options) do
 					if option.Value == Item.Value then
@@ -765,11 +984,29 @@ function ProfilePanel.New(Window, Config, WindUI)
 				return Item
 			end
 			if IsChoice then
-				local index = 1
+				local wanted = value
+				if Item.Flag == "ReworkLanguage" then
+					wanted = Localization.Normalise(value) or wanted
+				elseif Item.Flag == "ReworkTheme" then
+					wanted = ThemeKeyOf(WindUI, value)
+				end
+				local index
 				for i, option in ipairs(Options) do
-					if option.Value == value then
+					if option.Value == wanted then
 						index = i
 						break
+					end
+				end
+				if not index then
+					-- Unknown value: keep the current option instead of
+					-- silently snapping back to the first one (the language
+					-- row used to show RU while the library was EN).
+					index = 1
+					for i, option in ipairs(Options) do
+						if option.Value == Item.Value then
+							index = i
+							break
+						end
 					end
 				end
 				local option = Options[index]
@@ -835,6 +1072,9 @@ function ProfilePanel.New(Window, Config, WindUI)
 
 		local Section = {
 			Title = SectionConfig.Title or "Раздел",
+			-- Keep the original name so GetSection("Комбат") keeps working
+			-- after the UI is switched to English.
+			OriginalTitle = SectionConfig.Title,
 			TitleKey = SectionConfig.TitleKey,
 			Expanded = SectionConfig.Expanded ~= false,
 			ContentHeight = 0,
@@ -929,6 +1169,7 @@ function ProfilePanel.New(Window, Config, WindUI)
 		Section.UIElements = {
 			Wrapper = Wrapper,
 			Header = SectionHeader,
+			TitleLabel = SectionHeader.Title,
 			Content = Content,
 			Layout = Content.Layout,
 		}
@@ -1035,11 +1276,9 @@ function ProfilePanel.New(Window, Config, WindUI)
 			Title = Localization.Get("theme"),
 			TitleKey = "theme",
 			Flag = "ReworkTheme",
-			Options = {
-				{ Value = "Dark", LabelKey = "theme.dark" },
-				{ Value = "Light", LabelKey = "theme.light" },
-			},
-			Default = (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()) or "Dark",
+			-- Every theme shipped by WindUI (plus any AddTheme() entries).
+			Options = BuildThemeOptions(WindUI),
+			Default = ThemeKeyOf(WindUI, (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()) or "Dark"),
 			Callback = function(value)
 				if WindUI.SetTheme then
 					WindUI:SetTheme(value)
@@ -1084,15 +1323,36 @@ function ProfilePanel.New(Window, Config, WindUI)
 	end
 
 	function self:RefreshLanguage(language)
-		local lang = language or Localization.GetLanguage()
+		local lang = Localization.Normalise(language) or Localization.GetLanguage()
+		CloseChoicePopup()
 		for _, section in ipairs(self.Sections) do
 			if section.TitleKey then
 				section.Title = Localization.Get(section.TitleKey, lang)
+				local label = section.UIElements and section.UIElements.TitleLabel
+				if label then
+					label.Text = section.Title
+					pcall(function()
+						Creator:ChangeTranslationKey(label, Localization.Key(section.TitleKey))
+					end)
+				end
 			end
 		end
 		for _, item in ipairs(self.Items) do
+			if item.TitleKey and item.UIElements and item.UIElements.Label then
+				item.Title = Localization.Get(item.TitleKey, lang)
+				item.UIElements.Label.Text = item.Title
+			end
 			if item.Type == "Choice" then
-				item:Set(item.Value, false)
+				local wanted = item.Value
+				if item.Flag == "ReworkLanguage" then
+					-- The row must mirror the ACTUAL library language.
+					-- WindUI:SetLanguage("ru") used to leave it on "en".
+					wanted = lang
+				elseif item.Flag == "ReworkTheme" then
+					wanted = ThemeKeyOf(self.WindUI,
+						(self.WindUI.GetCurrentTheme and self.WindUI:GetCurrentTheme()) or wanted)
+				end
+				item:Set(wanted, false)
 			end
 		end
 		return self
@@ -1103,6 +1363,27 @@ function ProfilePanel.New(Window, Config, WindUI)
 			self:RefreshLanguage(language)
 		end
 	end)
+
+	-- A theme changed from code (WindUI:SetTheme / Creator.SetTheme) must
+	-- be reflected in the panel row, and clicking the row must not recurse.
+	local function SyncTheme(value)
+		if self.Destroyed then
+			return
+		end
+		local item = self:GetItem("ReworkTheme")
+		if item then
+			item:Set(ThemeKeyOf(self.WindUI, value), false)
+		end
+	end
+
+	if WindUI and WindUI.OnThemeChange then
+		self.ThemeUnsubscribe = WindUI:OnThemeChange(SyncTheme)
+	end
+	if WindUI and WindUI.Creator and WindUI.Creator.OnThemeChange then
+		self.CreatorThemeConnection = WindUI.Creator:OnThemeChange(function(theme)
+			SyncTheme(theme and theme.Name or (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()))
+		end)
+	end
 
 	-- Public convenience API (the UI rows call these too).
 	function self:SetLanguage(language)
@@ -1127,9 +1408,21 @@ function ProfilePanel.New(Window, Config, WindUI)
 	-- Generic value helpers
 	------------------------------------------------------------------
 	function self:GetSection(name)
+		local wanted = string.lower(tostring(name))
+		local function matches(value)
+			return value ~= nil and string.lower(tostring(value)) == wanted
+		end
 		for _, section in ipairs(self.Sections) do
-			if section.Title == name then
+			-- Language-independent: works with "Комбат", "Combat" and
+			-- "combat" regardless of the currently selected language.
+			if matches(section.Title) or matches(section.OriginalTitle) or matches(section.TitleKey) then
 				return section
+			end
+			if section.TitleKey then
+				if matches(Localization.Get(section.TitleKey, "ru"))
+					or matches(Localization.Get(section.TitleKey, "en")) then
+					return section
+				end
 			end
 		end
 		return nil
@@ -1280,6 +1573,17 @@ function ProfilePanel.New(Window, Config, WindUI)
 			pcall(self.LanguageUnsubscribe)
 			self.LanguageUnsubscribe = nil
 		end
+		if self.ThemeUnsubscribe then
+			pcall(self.ThemeUnsubscribe)
+			self.ThemeUnsubscribe = nil
+		end
+		if self.CreatorThemeConnection then
+			pcall(function()
+				self.CreatorThemeConnection:Disconnect()
+			end)
+			self.CreatorThemeConnection = nil
+		end
+		CloseChoicePopup()
 		if self.StaggerHandle then
 			self.StaggerHandle:Cancel()
 		end
@@ -1335,6 +1639,13 @@ function ProfilePanel.New(Window, Config, WindUI)
 			return
 		end
 		local position = input.Position
+		if ChoicePopup.Visible and IsInside(ChoicePopup, position.X, position.Y) then
+			return
+		end
+		if ChoicePopup.Visible then
+			CloseChoicePopup()
+			return
+		end
 		if not IsInside(Holder, position.X, position.Y)
 			and not IsInside(UserIcon, position.X, position.Y) then
 			self:Close()

@@ -4,14 +4,13 @@
     Вставьте в executor (или в StarterPlayerScripts при разработке
     через Rojo). КЛЮЧ ДЛЯ ВХОДА: test
 
-    • пока PR #2 не влит в main, грузимся с ветки реворка;
-      после мержа замените URL на .../refs/heads/main/dist/main.lua
+    • бандл грузится из main: .../refs/heads/main/dist/main.lua
     • внизу диалога три кнопки: «Выход», «Get Key», «Check Key»
     • если ключ не ввели или нажали «Выход», CreateWindow вернёт nil
 ]]
 
 local WindUI = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/tipmetro-bot/windUIrework/refs/heads/arena/6e86f6ad-winduirework/dist/main.lua"
+	"https://raw.githubusercontent.com/tipmetro-bot/windUIrework/refs/heads/main/dist/main.lua"
 ))()
 
 WindUI:SetAnimationProfile("Smooth") -- Smooth | Snappy | Calm | Reduced | None
@@ -38,6 +37,10 @@ local Window = WindUI:CreateWindow({
 	Settings = { Language = "ru" },      -- Settings = false скрывает секцию
 	Loading = false,                     -- true или { Enabled = true, Duration = 1.2 }
 
+	-- В панели аккаунта есть секция «Настройки»: кликом меняется язык
+	-- RU / ENG и ЛЮБАЯ тема WindUI (Dark, Light, Rose, Violet, Midnight …)
+	-- — править код для смены темы/языка не нужно.
+
 	-- ▼▼▼ KEY SYSTEM: единственный рабочий ключ — test ▼▼▼
 	KeySystem = {
 		Title = "WindUI Rework · Key System",
@@ -52,13 +55,15 @@ local Window = WindUI:CreateWindow({
 	-- Профиль в нижнем левом углу сайдбара
 	User = { Enabled = true, Anonymous = false },
 
-	-- Кнопка открытия/закрытия: ПК, телефон и геймпад
+	-- Кнопка открытия меню: ПК, телефон и геймпад.
+	-- StayVisible = false => пока меню открыто кнопки нет, а как только
+	-- меню закрыли/скрыли — кнопка сразу появляется (и открывает его).
 	OpenButton = {
 		Enabled = true,
 		OnlyMobile = false,
-		StayVisible = true,    -- остаётся и при открытом окне => закрывает его
+		StayVisible = false,
 		Draggable = true,
-		Title = "Открыть UI",
+		-- Title = "Открыть UI",  -- без Title подпись локализуется: Открыть / Open
 		CornerRadius = UDim.new(1, 0),
 		Color = ColorSequence.new(Color3.fromHex("40c9ff"), Color3.fromHex("e81cff")),
 	},

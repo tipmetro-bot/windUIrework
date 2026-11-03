@@ -287,7 +287,21 @@ function WindUI:SetAnimationSpeed(value)
 end
 
 function WindUI:OnThemeChange(func)
-	WindUI.OnThemeChangeFunction = func
+	if typeof(func) ~= "function" then
+		return function() end
+	end
+	-- Rework: keep every subscriber. Upstream stored ONE callback, so the
+	-- profile panel's theme row silently disabled the user's own handler.
+	WindUI.ThemeChangeSubscribers = WindUI.ThemeChangeSubscribers or {}
+	WindUI.ThemeChangeSubscribers[#WindUI.ThemeChangeSubscribers + 1] = func
+	return function()
+		for index, callback in ipairs(WindUI.ThemeChangeSubscribers or {}) do
+			if callback == func then
+				table.remove(WindUI.ThemeChangeSubscribers, index)
+				break
+			end
+		end
+	end
 end
 
 function WindUI:AddTheme(LTheme)
@@ -298,22 +312,35 @@ function WindUI:AddTheme(LTheme)
 	-- Rework (bug 5): a theme added/replaced at runtime must be applied to
 	-- already-created elements instead of only being stored in the table.
 	if WindUI.CurrentTheme == LTheme.Name or WindUI.Theme == LTheme then
-		Creator.SetTheme(LTheme)
+		WindUI:SetTheme(LTheme.Name)
 	end
 	return LTheme
 end
 
 function WindUI:SetTheme(Value)
-	if WindUI.Themes[Value] then
-		WindUI.Theme = WindUI.Themes[Value]
+	local Theme = WindUI.Themes[Value]
+	if not Theme then
+		-- Allow the pretty Name ("Monokai Pro") as well as the table key.
+		for key, candidate in pairs(WindUI.Themes) do
+			if type(candidate) == "table" and candidate.Name == Value then
+				Theme, Value = candidate, key
+				break
+			end
+		end
+	end
+	if Theme then
+		WindUI.Theme = Theme
 		WindUI.CurrentTheme = Value -- rework: custom elements read this
-		Creator.SetTheme(WindUI.Themes[Value])
+		Creator.SetTheme(Theme)
 
 		if WindUI.OnThemeChangeFunction then
 			Creator.SafeCallback(WindUI.OnThemeChangeFunction, Value)
 		end
+		for _, callback in ipairs(WindUI.ThemeChangeSubscribers or {}) do
+			Creator.SafeCallback(callback, Value)
+		end
 
-		return WindUI.Themes[Value]
+		return Theme
 	end
 	return nil
 end
@@ -322,7 +349,9 @@ function WindUI:GetThemes()
 	return WindUI.Themes
 end
 function WindUI:GetCurrentTheme()
-	return WindUI.Theme.Name
+	-- Return the *table key* accepted by SetTheme. Some themes have a
+	-- pretty Name ("Monokai Pro") that is not a valid SetTheme argument.
+	return WindUI.CurrentTheme or (WindUI.Theme and WindUI.Theme.Name) or "Dark"
 end
 function WindUI:GetTransparency()
 	return WindUI.Transparent or false
@@ -467,15 +496,14 @@ function WindUI:CreateWindow(Config)
 	end
 	WindUI.CreateWindowBusy = true
 
-	if not RunService:IsStudio() and writefile then
-		if not isfolder("WindUI") then
-			makefolder("WindUI")
-		end
-		if Config.Folder then
-			makefolder(Config.Folder)
-		else
-			makefolder(Config.Title)
-		end
+	if not RunService:IsStudio() and typeof(writefile) == "function"
+		and typeof(isfolder) == "function" and typeof(makefolder) == "function" then
+		pcall(function()
+			if not isfolder("WindUI") then
+				makefolder("WindUI")
+			end
+			makefolder(Config.Folder or Config.Title)
+		end)
 	end
 
 	Config.WindUI = WindUI
@@ -537,10 +565,22 @@ function WindUI:CreateWindow(Config)
 		end
 
 		local keyPath = (Config.Folder or "Temp") .. "/" .. Filename .. ".key"
+		-- Studio / plain Roblox have no executor filesystem API. Calling a
+		-- nil isfile()/readfile() used to crash the whole Key System dialog.
+		local function KeyFileExists(path)
+			return typeof(isfile) == "function" and isfile(path) or false
+		end
+		local function ReadKeyFile(path)
+			if typeof(readfile) ~= "function" then
+				return nil
+			end
+			local ok, contents = pcall(readfile, path)
+			return ok and contents or nil
+		end
 
 		if Config.KeySystem.KeyValidator then
-			if Config.KeySystem.SaveKey and isfile(keyPath) then
-				local savedKey = readfile(keyPath)
+			if Config.KeySystem.SaveKey and KeyFileExists(keyPath) then
+				local savedKey = ReadKeyFile(keyPath)
 				local isValid = Config.KeySystem.KeyValidator(savedKey)
 
 				if isValid then
@@ -552,8 +592,8 @@ function WindUI:CreateWindow(Config)
 				loadKeysystem()
 			end
 		elseif not Config.KeySystem.API then
-			if Config.KeySystem.SaveKey and isfile(keyPath) then
-				local savedKey = readfile(keyPath)
+			if Config.KeySystem.SaveKey and KeyFileExists(keyPath) then
+				local savedKey = ReadKeyFile(keyPath)
 				local isKey = (type(Config.KeySystem.Key) == "table") and table.find(Config.KeySystem.Key, savedKey)
 					or tostring(Config.KeySystem.Key) == tostring(savedKey)
 
@@ -566,8 +606,8 @@ function WindUI:CreateWindow(Config)
 				loadKeysystem()
 			end
 		else
-			if isfile(keyPath) then
-				local fileKey = readfile(keyPath)
+			if KeyFileExists(keyPath) then
+				local fileKey = ReadKeyFile(keyPath)
 				local isSuccess = false
 
 				for _, i in next, Config.KeySystem.API do
@@ -600,10 +640,10 @@ function WindUI:CreateWindow(Config)
 		-- terminates, even if the dialog is closed without a key. A frame
 		-- counter capped at 15 s on 60 FPS, which was far too short for a
 		-- human to fetch and type a key, so use wall-clock time instead.
-		local keyWaitStarted = os.clock()
+		local keyWaitStarted = os.time()
 		repeat
 			task.wait()
-		until CanLoadWindow or KeySystemCancelled or (os.clock() - keyWaitStarted) > 300
+		until CanLoadWindow or KeySystemCancelled or (os.time() - keyWaitStarted) > 300
 
 		if not CanLoadWindow then
 			WindUI.CreateWindowBusy = false
@@ -31585,6 +31625,12 @@ return function(Config)
 		if Window.OpenButtonMain and Window.OpenButtonMain.SetOpenState then
 			Window.OpenButtonMain:SetOpenState(false)
 		end
+		-- Rework: hide/show the button IMMEDIATELY with the state, not only
+		-- inside the animation coroutine 0.06–0.4 s later. A closed window
+		-- must always have its open button on screen (PC and phone).
+		if Window.OpenButtonMain and Window.IsOpenButtonEnabled then
+			Window.OpenButtonMain:Refresh()
+		end
 		task.spawn(function()
 			if Window.OnOpenCallback then
 				task.spawn(function()
@@ -31713,6 +31759,9 @@ return function(Config)
 		if Window.OpenButtonMain and Window.OpenButtonMain.SetOpenState then
 			Window.OpenButtonMain:SetOpenState(true)
 		end
+		if Window.OpenButtonMain and Window.IsOpenButtonEnabled then
+			Window.OpenButtonMain:Refresh()
+		end
 
 		Animations:Play(Window.UIElements.Main, "Close", {
 			Size = UDim2.new(Window.Size.X.Scale, Window.Size.X.Offset, 0, 0),
@@ -31799,6 +31848,10 @@ return function(Config)
 
 				Window.Destroyed = true
 
+				if Window.OpenButtonMain and Window.OpenButtonMain.Destroy then
+					Window.OpenButtonMain:Destroy()
+				end
+
 				task.wait(0.4)
 
 				-- Rework (bug 8): release drag connections before the guis
@@ -31836,14 +31889,12 @@ return function(Config)
 		return Window:Close():Destroy()
 	end
 
-	local LastToggle = 0
 	function Window:Toggle()
-		-- Key repeat / double tap (Activated + MouseButton1Click) protection.
-		local now = os.clock()
-		if now - LastToggle < 0.18 then
-			return Window
-		end
-		LastToggle = now
+		-- Rework: no debounce here. The open button already debounces its
+		-- own Activated/MouseButton1Click/TouchTap signals, and a global
+		-- 0.18 s lock made back-to-back programmatic toggles (or a fast
+		-- double tap on a phone) silently do nothing. Key auto-repeat is
+		-- filtered in the InputBegan handler instead.
 		if Window.Closed then
 			Window:Open()
 		else
@@ -31960,12 +32011,19 @@ return function(Config)
 		end)
 	end
 
+	local LastKeyToggle = 0
 	Creator.AddSignal(UserInputService.InputBegan, function(input, isProcessed)
 		if isProcessed or Window.Destroyed then
 			return
 		end
 		-- Supports Enum.KeyCode, string names and a list of keys.
 		if MatchesKey(input, Window.ToggleKey) then
+			-- Only filter OS key auto-repeat, not real toggles.
+			local now = os.clock()
+			if now - LastKeyToggle < 0.12 then
+				return
+			end
+			LastKeyToggle = now
 			Window:Toggle()
 		end
 	end)
@@ -32861,6 +32919,8 @@ function OpenButton.New(Window)
 		VisibleState = false,
 		WindowClosed = false,
 		DefaultTitle = Window.Title or "WindUI",
+		CustomTitle = nil,
+		Destroyed = false,
 	}
 
 	local Icon
@@ -33147,21 +33207,46 @@ function OpenButton.New(Window)
 		)
 	end
 
-	-- Rework: the button now has an explicit open/closed state. While the
-	-- window is open and `StayVisible` is on, it says "Close" and clicking
-	-- it really closes the menu (before it re-animated and looked broken).
-	function OpenButtonMain:SetOpenState(windowClosed)
-		local closed = windowClosed == true
-		if self.WindowClosed == closed then
+	-- Rework: the button has an explicit open/closed state. Writing a raw
+	-- `loc:rework.open` string into Title.Text used to display the key
+	-- itself on the button, and switching language never updated it.
+	-- Register the key through Creator so it resolves AND stays in sync.
+	function OpenButtonMain:RefreshTitle()
+		if self.Destroyed or not Title then
 			return self
 		end
-		self.WindowClosed = closed
-		if self.StayVisible then
-			Title.Text = Localization.Key(closed and "open" or "close")
+		local key
+		if self.StayVisible and self.WindowClosed and self.CustomTitle then
+			-- A real toggle, but respect a user-supplied label for "open".
+			Title.Text = self.CustomTitle
+			pcall(function()
+				Creator:ChangeTranslationKey(Title, self.CustomTitle)
+			end)
+			return self
+		elseif self.StayVisible then
+			key = self.WindowClosed and "open" or "close"
+		elseif self.CustomTitle then
+			Title.Text = self.CustomTitle
+			pcall(function()
+				Creator:ChangeTranslationKey(Title, self.CustomTitle)
+			end)
+			return self
 		else
-			Title.Text = self.DefaultTitle or "WindUI"
+			key = "open"
 		end
+		Title.Text = Localization.Get(key)
+		pcall(function()
+			Creator:ChangeTranslationKey(Title, Localization.Key(key))
+		end)
 		return self
+	end
+
+	function OpenButtonMain:SetOpenState(windowClosed)
+		local closed = windowClosed == true
+		self.WindowClosed = closed
+		-- Always refresh: StayVisible / language may have changed even when
+		-- the window state did not.
+		return self:RefreshTitle()
 	end
 
 	function OpenButtonMain:IsWindowOpen()
@@ -33169,7 +33254,7 @@ function OpenButton.New(Window)
 	end
 
 	function OpenButtonMain:ShouldShow()
-		if not self.Enabled or Window.Destroyed then
+		if self.Destroyed or not self.Enabled or Window.Destroyed then
 			return false
 		end
 		if self.OnlyMobile and Window.IsMobile == false then
@@ -33182,6 +33267,9 @@ function OpenButton.New(Window)
 	end
 
 	function OpenButtonMain:Visible(value)
+		if self.Destroyed then
+			return self
+		end
 		if value == nil then
 			value = self:ShouldShow()
 		end
@@ -33262,10 +33350,12 @@ function OpenButton.New(Window)
 
 	function OpenButtonMain:SetTitle(text)
 		if Title and text then
-			Title.Text = tostring(text)
+			self.CustomTitle = tostring(text)
+			Title.Text = self.CustomTitle
 			pcall(function()
-				Creator:ChangeTranslationKey(Title, tostring(text))
+				Creator:ChangeTranslationKey(Title, self.CustomTitle)
 			end)
+			self:RefreshTitle()
 		end
 		return self
 	end
@@ -33389,7 +33479,36 @@ function OpenButton.New(Window)
 		end)
 	end)
 
+	-- Keep the label in sync when the language is switched from the panel.
+	OpenButtonMain.LanguageUnsubscribe = Localization.OnChange(function()
+		if not OpenButtonMain.Destroyed then
+			OpenButtonMain:RefreshTitle()
+		end
+	end)
+
+	function OpenButtonMain:Destroy()
+		if self.Destroyed then
+			return
+		end
+		self.Destroyed = true
+		if self.LanguageUnsubscribe then
+			pcall(self.LanguageUnsubscribe)
+			self.LanguageUnsubscribe = nil
+		end
+		if DragModule and DragModule.Destroy then
+			pcall(function()
+				DragModule:Destroy()
+			end)
+		end
+		if Container and Container.Destroy then
+			pcall(function()
+				Container:Destroy()
+			end)
+		end
+	end
+
 	OpenButtonMain:SetScale(1)
+	OpenButtonMain:RefreshTitle()
 	return OpenButtonMain
 end
 
@@ -33520,19 +33639,115 @@ local function OptionLabel(option, language)
 	return tostring(option.Label ~= nil and option.Label or option.Value)
 end
 
+--- WindUI ships many themes (Dark, Light, Rose, Plant, Red, Indigo, Sky,
+--- Violet, Amber, Emerald, Midnight, Crimson, Monokai Pro, Cotton Candy,
+--- Mellowsi, Rainbow). Build the list from the library itself instead of
+--- hard-coding Dark/Light, so custom AddTheme() entries show up too.
+local function ThemeKeyOf(WindUI, value)
+	if not WindUI or not WindUI.GetThemes then
+		return value
+	end
+	local themes = WindUI:GetThemes() or {}
+	if themes[value] then
+		return value
+	end
+	for key, theme in pairs(themes) do
+		if type(theme) == "table" and (theme.Name == value or key == value) then
+			return key
+		end
+	end
+	return value
+end
+
+local function BuildThemeOptions(WindUI)
+	local options = {}
+	local themes = WindUI and WindUI.GetThemes and WindUI:GetThemes() or nil
+	if type(themes) == "table" then
+		local names = {}
+		for key, theme in pairs(themes) do
+			if type(theme) == "table" then
+				names[#names + 1] = {
+					Value = key,
+					Label = tostring(theme.Name or key),
+				}
+			end
+		end
+		table.sort(names, function(a, b)
+			-- Dark / Light first, then alphabetical.
+			local rank = { Dark = 0, Light = 1 }
+			local ra, rb = rank[a.Value] or 2, rank[b.Value] or 2
+			if ra ~= rb then
+				return ra < rb
+			end
+			return a.Label < b.Label
+		end)
+		for _, entry in ipairs(names) do
+			options[#options + 1] = entry
+		end
+	end
+	if #options == 0 then
+		options = {
+			{ Value = "Dark", LabelKey = "theme.dark" },
+			{ Value = "Light", LabelKey = "theme.light" },
+		}
+	end
+	return options
+end
+
+local function NormalizeText(value)
+	return string.lower(tostring(value or ""))
+end
+
+-- A user-supplied section is usually written with the same Russian labels
+-- as the built-in ones ("Комбат", "Аимбот", …). Inherit the known
+-- translation keys so RU/EN switching also works for custom panels.
+local SECTION_TITLE_KEYS = {}
+local ITEM_TITLE_KEYS = {}
+do
+	local function remember(map, key, value)
+		if key and value then
+			map[NormalizeText(key)] = value
+		end
+	end
+	for _, section in ipairs(DEFAULT_SECTIONS) do
+		if section.TitleKey then
+			remember(SECTION_TITLE_KEYS, section.Title, section.TitleKey)
+			remember(SECTION_TITLE_KEYS, Localization.Get(section.TitleKey, "ru"), section.TitleKey)
+			remember(SECTION_TITLE_KEYS, Localization.Get(section.TitleKey, "en"), section.TitleKey)
+		end
+		for _, item in ipairs(section.Items or {}) do
+			if item.TitleKey then
+				remember(ITEM_TITLE_KEYS, item.Title, item.TitleKey)
+				remember(ITEM_TITLE_KEYS, Localization.Get(item.TitleKey, "ru"), item.TitleKey)
+				remember(ITEM_TITLE_KEYS, Localization.Get(item.TitleKey, "en"), item.TitleKey)
+			end
+		end
+	end
+end
+
 local function CopySections(sections)
 	local result = {}
 	for index, section in ipairs(sections or DEFAULT_SECTIONS) do
-		local copy = {
-			Title = section.Title,
-			Icon = section.Icon,
-			Expanded = section.Expanded ~= false,
-			Items = {},
-		}
+		-- Copy EVERY key (TitleKey in particular). Dropping it made the
+		-- default Комбат / Визуалы sections stay Russian after RU -> EN.
+		local copy = {}
+		for key, value in next, section do
+			if key ~= "Items" then
+				copy[key] = value
+			end
+		end
+		copy.Expanded = section.Expanded ~= false
+		copy.Items = {}
+		if not copy.TitleKey and copy.Title then
+			copy.TitleKey = SECTION_TITLE_KEYS[NormalizeText(copy.Title)]
+		end
 		for itemIndex, item in ipairs(section.Items or {}) do
 			local itemCopy = {}
 			for key, value in next, item do
 				itemCopy[key] = value
+			end
+			if not itemCopy.TitleKey and itemCopy.Title then
+				itemCopy.TitleKey = ITEM_TITLE_KEYS[NormalizeText(itemCopy.Title)]
 			end
 			copy.Items[itemIndex] = itemCopy
 		end
@@ -33992,6 +34207,123 @@ function ProfilePanel.New(Window, Config, WindUI)
 	end
 
 	------------------------------------------------------------------
+	-- Choice popup: a real scrollable list for selectors with many
+	-- options (all WindUI themes). Two-option rows keep the one-tap
+	-- toggle -- perfect for RU / EN.
+	------------------------------------------------------------------
+	local ChoicePopup = New("CanvasGroup", {
+		Name = "ChoicePopup",
+		Parent = Holder,
+		Size = UDim2.new(0, 196, 0, 200),
+		BackgroundTransparency = 1,
+		GroupTransparency = 0,
+		Visible = false,
+		ZIndex = 260,
+	}, {
+		Creator.NewRoundFrame(10, "Squircle", {
+			Name = "Background",
+			Size = UDim2.new(1, 0, 1, 0),
+			ImageTransparency = 0.02,
+			ZIndex = 260,
+			ThemeTag = { ImageColor3 = "WindowBackground" },
+		}),
+		Creator.NewRoundFrame(10, "SquircleOutline", {
+			Name = "Outline",
+			Size = UDim2.new(1, 0, 1, 0),
+			ImageTransparency = 0.75,
+			ZIndex = 261,
+			ThemeTag = { ImageColor3 = "Text" },
+		}),
+	})
+
+	local ChoiceList = New("ScrollingFrame", {
+		Name = "List",
+		Parent = ChoicePopup,
+		Size = UDim2.new(1, -8, 1, -8),
+		Position = UDim2.new(0, 4, 0, 4),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 2,
+		ScrollBarImageTransparency = 0.6,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		ZIndex = 262,
+	}, {
+		New("UIListLayout", {
+			Name = "Layout",
+			Padding = UDim.new(0, 2),
+			SortOrder = "LayoutOrder",
+		}),
+	})
+
+	-- Exposed for tests / advanced users (and for outside-click handling).
+	self.UIElements.ChoicePopup = ChoicePopup
+	self.UIElements.ChoiceList = ChoiceList
+
+	local ChoicePopupGroup = "ProfilePanelChoicePopup"
+	local ChoicePopupItem = nil
+
+	local function CloseChoicePopup()
+		ChoicePopup.Visible = false
+		ChoicePopupItem = nil
+		Creator.DisconnectGroup(ChoicePopupGroup)
+	end
+
+	local function ShowChoicePopup(Item, Row)
+		if ChoicePopupItem == Item and ChoicePopup.Visible then
+			CloseChoicePopup()
+			return
+		end
+		CloseChoicePopup()
+		ChoicePopupItem = Item
+
+		for _, child in ipairs(ChoiceList:GetChildren()) do
+			if child.Name ~= "Layout" then
+				pcall(function()
+					child:Destroy()
+				end)
+			end
+		end
+
+		local rowHeight = 28
+		for index, option in ipairs(Item.Options) do
+			local OptionButton = New("TextButton", {
+				Name = "Option" .. tostring(index),
+				Parent = ChoiceList,
+				Size = UDim2.new(1, -4, 0, rowHeight - 2),
+				LayoutOrder = index,
+				BackgroundTransparency = option.Value == Item.Value and 0.72 or 0.94,
+				BackgroundColor3 = ACCENT,
+				Text = OptionLabel(option, Localization.GetLanguage()),
+				TextSize = 12,
+				TextXAlignment = "Left",
+				TextTruncate = "AtEnd",
+				ZIndex = 263,
+				ThemeTag = { TextColor3 = "Text" },
+			}, {
+				New("UIPadding", { PaddingLeft = UDim.new(0, 8) }),
+				New("UICorner", { CornerRadius = UDim.new(0, 6) }),
+			})
+			local function Pick()
+				Item:Set(option.Value, true)
+				CloseChoicePopup()
+			end
+			Creator.AddScopedSignal(ChoicePopupGroup, OptionButton.Activated, Pick)
+			Creator.AddScopedSignal(ChoicePopupGroup, OptionButton.MouseButton1Click, Pick)
+		end
+
+		ChoiceList.CanvasSize = UDim2.new(0, 0, 0, #Item.Options * rowHeight + 4)
+		ChoicePopup.Size = UDim2.new(0, 196, 0, math.min(#Item.Options * rowHeight + 8, 232))
+
+		local rowPos = Row.AbsolutePosition or { X = 0, Y = 0 }
+		local holderPos = Holder.AbsolutePosition or { X = 0, Y = 0 }
+		local holderWidth = (Holder.AbsoluteSize and Holder.AbsoluteSize.X) or 300
+		local x = math.max(8, math.min(rowPos.X - holderPos.X, holderWidth - 204))
+		local y = math.max(8, (rowPos.Y - holderPos.Y) - ChoicePopup.Size.Y.Offset / 2)
+		ChoicePopup.Position = UDim2.new(0, x, 0, y)
+		ChoicePopup.Visible = true
+	end
+
+	------------------------------------------------------------------
 	-- Item row factory
 	------------------------------------------------------------------
 	local function CreateItem(Section, ItemConfig)
@@ -34129,6 +34461,12 @@ function ProfilePanel.New(Window, Config, WindUI)
 				end
 			end)
 			if IsChoice then
+				if #Options > 2 then
+					-- 3+ options (e.g. the full WindUI theme list):
+					-- opening a list beats clicking 16 times to cycle.
+					ShowChoicePopup(Item, Row)
+					return
+				end
 				local index = 1
 				for i, option in ipairs(Options) do
 					if option.Value == Item.Value then
@@ -34164,11 +34502,29 @@ function ProfilePanel.New(Window, Config, WindUI)
 				return Item
 			end
 			if IsChoice then
-				local index = 1
+				local wanted = value
+				if Item.Flag == "ReworkLanguage" then
+					wanted = Localization.Normalise(value) or wanted
+				elseif Item.Flag == "ReworkTheme" then
+					wanted = ThemeKeyOf(WindUI, value)
+				end
+				local index
 				for i, option in ipairs(Options) do
-					if option.Value == value then
+					if option.Value == wanted then
 						index = i
 						break
+					end
+				end
+				if not index then
+					-- Unknown value: keep the current option instead of
+					-- silently snapping back to the first one (the language
+					-- row used to show RU while the library was EN).
+					index = 1
+					for i, option in ipairs(Options) do
+						if option.Value == Item.Value then
+							index = i
+							break
+						end
 					end
 				end
 				local option = Options[index]
@@ -34234,6 +34590,9 @@ function ProfilePanel.New(Window, Config, WindUI)
 
 		local Section = {
 			Title = SectionConfig.Title or "Раздел",
+			-- Keep the original name so GetSection("Комбат") keeps working
+			-- after the UI is switched to English.
+			OriginalTitle = SectionConfig.Title,
 			TitleKey = SectionConfig.TitleKey,
 			Expanded = SectionConfig.Expanded ~= false,
 			ContentHeight = 0,
@@ -34328,6 +34687,7 @@ function ProfilePanel.New(Window, Config, WindUI)
 		Section.UIElements = {
 			Wrapper = Wrapper,
 			Header = SectionHeader,
+			TitleLabel = SectionHeader.Title,
 			Content = Content,
 			Layout = Content.Layout,
 		}
@@ -34434,11 +34794,9 @@ function ProfilePanel.New(Window, Config, WindUI)
 			Title = Localization.Get("theme"),
 			TitleKey = "theme",
 			Flag = "ReworkTheme",
-			Options = {
-				{ Value = "Dark", LabelKey = "theme.dark" },
-				{ Value = "Light", LabelKey = "theme.light" },
-			},
-			Default = (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()) or "Dark",
+			-- Every theme shipped by WindUI (plus any AddTheme() entries).
+			Options = BuildThemeOptions(WindUI),
+			Default = ThemeKeyOf(WindUI, (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()) or "Dark"),
 			Callback = function(value)
 				if WindUI.SetTheme then
 					WindUI:SetTheme(value)
@@ -34483,15 +34841,36 @@ function ProfilePanel.New(Window, Config, WindUI)
 	end
 
 	function self:RefreshLanguage(language)
-		local lang = language or Localization.GetLanguage()
+		local lang = Localization.Normalise(language) or Localization.GetLanguage()
+		CloseChoicePopup()
 		for _, section in ipairs(self.Sections) do
 			if section.TitleKey then
 				section.Title = Localization.Get(section.TitleKey, lang)
+				local label = section.UIElements and section.UIElements.TitleLabel
+				if label then
+					label.Text = section.Title
+					pcall(function()
+						Creator:ChangeTranslationKey(label, Localization.Key(section.TitleKey))
+					end)
+				end
 			end
 		end
 		for _, item in ipairs(self.Items) do
+			if item.TitleKey and item.UIElements and item.UIElements.Label then
+				item.Title = Localization.Get(item.TitleKey, lang)
+				item.UIElements.Label.Text = item.Title
+			end
 			if item.Type == "Choice" then
-				item:Set(item.Value, false)
+				local wanted = item.Value
+				if item.Flag == "ReworkLanguage" then
+					-- The row must mirror the ACTUAL library language.
+					-- WindUI:SetLanguage("ru") used to leave it on "en".
+					wanted = lang
+				elseif item.Flag == "ReworkTheme" then
+					wanted = ThemeKeyOf(self.WindUI,
+						(self.WindUI.GetCurrentTheme and self.WindUI:GetCurrentTheme()) or wanted)
+				end
+				item:Set(wanted, false)
 			end
 		end
 		return self
@@ -34502,6 +34881,27 @@ function ProfilePanel.New(Window, Config, WindUI)
 			self:RefreshLanguage(language)
 		end
 	end)
+
+	-- A theme changed from code (WindUI:SetTheme / Creator.SetTheme) must
+	-- be reflected in the panel row, and clicking the row must not recurse.
+	local function SyncTheme(value)
+		if self.Destroyed then
+			return
+		end
+		local item = self:GetItem("ReworkTheme")
+		if item then
+			item:Set(ThemeKeyOf(self.WindUI, value), false)
+		end
+	end
+
+	if WindUI and WindUI.OnThemeChange then
+		self.ThemeUnsubscribe = WindUI:OnThemeChange(SyncTheme)
+	end
+	if WindUI and WindUI.Creator and WindUI.Creator.OnThemeChange then
+		self.CreatorThemeConnection = WindUI.Creator:OnThemeChange(function(theme)
+			SyncTheme(theme and theme.Name or (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()))
+		end)
+	end
 
 	-- Public convenience API (the UI rows call these too).
 	function self:SetLanguage(language)
@@ -34526,9 +34926,21 @@ function ProfilePanel.New(Window, Config, WindUI)
 	-- Generic value helpers
 	------------------------------------------------------------------
 	function self:GetSection(name)
+		local wanted = string.lower(tostring(name))
+		local function matches(value)
+			return value ~= nil and string.lower(tostring(value)) == wanted
+		end
 		for _, section in ipairs(self.Sections) do
-			if section.Title == name then
+			-- Language-independent: works with "Комбат", "Combat" and
+			-- "combat" regardless of the currently selected language.
+			if matches(section.Title) or matches(section.OriginalTitle) or matches(section.TitleKey) then
 				return section
+			end
+			if section.TitleKey then
+				if matches(Localization.Get(section.TitleKey, "ru"))
+					or matches(Localization.Get(section.TitleKey, "en")) then
+					return section
+				end
 			end
 		end
 		return nil
@@ -34679,6 +35091,17 @@ function ProfilePanel.New(Window, Config, WindUI)
 			pcall(self.LanguageUnsubscribe)
 			self.LanguageUnsubscribe = nil
 		end
+		if self.ThemeUnsubscribe then
+			pcall(self.ThemeUnsubscribe)
+			self.ThemeUnsubscribe = nil
+		end
+		if self.CreatorThemeConnection then
+			pcall(function()
+				self.CreatorThemeConnection:Disconnect()
+			end)
+			self.CreatorThemeConnection = nil
+		end
+		CloseChoicePopup()
 		if self.StaggerHandle then
 			self.StaggerHandle:Cancel()
 		end
@@ -34734,6 +35157,13 @@ function ProfilePanel.New(Window, Config, WindUI)
 			return
 		end
 		local position = input.Position
+		if ChoicePopup.Visible and IsInside(ChoicePopup, position.X, position.Y) then
+			return
+		end
+		if ChoicePopup.Visible then
+			CloseChoicePopup()
+			return
+		end
 		if not IsInside(Holder, position.X, position.Y)
 			and not IsInside(UserIcon, position.X, position.Y) then
 			self:Close()
@@ -35609,7 +36039,29 @@ local RunService = cloneref(game:GetService("RunService"))
 local HttpService = cloneref(game:GetService("HttpService"))
 local Creator = __WINDUI_REQUIRE("src/modules/Creator.lua")
 
-local Window 
+-- Rework: executor filesystem APIs are optional. Calling a nil
+-- IsFolder()/IsFile()/ReadFile() used to crash window creation in Studio
+-- and in executors that only expose writefile().
+local function IsFolder(path)
+    return typeof(isfolder) == "function" and isfolder(path) or false
+end
+local function MakeFolder(path)
+    if typeof(makefolder) == "function" then
+        pcall(makefolder, path)
+    end
+end
+local function IsFile(path)
+    return typeof(isfile) == "function" and isfile(path) or false
+end
+local function ReadFile(path)
+    if typeof(readfile) ~= "function" then
+        return nil
+    end
+    local ok, contents = pcall(readfile, path)
+    return ok and contents or nil
+end
+
+local Window
 
 local ConfigManager
 ConfigManager = {
@@ -35774,15 +36226,15 @@ function ConfigManager:Init(WindowTable)
     ConfigManager.Folder = Window.Folder
     ConfigManager.Path = "WindUI/" .. tostring(ConfigManager.Folder) .. "/config/"
     
-    if not isfolder(ConfigManager.Path) then
-        makefolder(ConfigManager.Path)
+    if not IsFolder(ConfigManager.Path) then
+        MakeFolder(ConfigManager.Path)
     end
     
     local files = ConfigManager:AllConfigs()
     
     for _, f in next, files do
-        if isfile and readfile and isfile(f .. ".json") then
-            ConfigManager.Configs[f] = readfile(f .. ".json")
+        if IsFile(f .. ".json") then
+            ConfigManager.Configs[f] = ReadFile(f .. ".json")
         end
     end
     
@@ -35800,8 +36252,8 @@ function ConfigManager:SetPath(customPath)
         ConfigManager.Path = customPath .. "/"
     end
     
-    if not isfolder(ConfigManager.Path) then
-        makefolder(ConfigManager.Path)
+    if not IsFolder(ConfigManager.Path) then
+        MakeFolder(ConfigManager.Path)
     end
     
     return true
@@ -35896,16 +36348,16 @@ function ConfigManager:CreateConfig(configFilename, autoload)
     end
     
     function ConfigModule:Load()
-        if isfile and not isfile(ConfigModule.Path) then 
+        if not IsFile(ConfigModule.Path) then 
             return false, "Config file does not exist" 
         end
         
         local success, loadData = pcall(function()
-            local readfile = readfile or function() 
-                warn("[ WindUI.ConfigManager ] The config system doesn't work in the studio.") 
-                return nil 
+            local contents = ReadFile(ConfigModule.Path)
+            if not contents then
+                return nil
             end
-            return HttpService:JSONDecode(readfile(ConfigModule.Path))
+            return HttpService:JSONDecode(contents)
         end)
         
         if not success then
@@ -35946,7 +36398,7 @@ function ConfigManager:CreateConfig(configFilename, autoload)
             return false, "delfile function is not available"
         end
         
-        if not isfile(ConfigModule.Path) then
+        if not IsFile(ConfigModule.Path) then
             return false, "Config file does not exist"
         end
         
@@ -35976,9 +36428,9 @@ function ConfigManager:CreateConfig(configFilename, autoload)
     end
     
     
-    if isfile(ConfigModule.Path) then
+    if IsFile(ConfigModule.Path) then
         local success, configData = pcall(function()
-            return HttpService:JSONDecode(readfile(ConfigModule.Path))
+            return HttpService:JSONDecode(ReadFile(ConfigModule.Path))
         end)
         
         if success and configData and configData.__autoload then
@@ -36029,7 +36481,7 @@ function ConfigManager:DeleteConfig(configName)
     
     local configPath = ConfigManager.Path .. configName .. ".json"
     
-    if not isfile(configPath) then
+    if not IsFile(configPath) then
         return false, "Config file does not exist"
     end
     
@@ -36054,8 +36506,8 @@ function ConfigManager:AllConfigs()
     if not listfiles then return {} end
     
     local files = {}
-    if not isfolder(ConfigManager.Path) then
-        makefolder(ConfigManager.Path)
+    if not IsFolder(ConfigManager.Path) then
+        MakeFolder(ConfigManager.Path)
         return files
     end
     
@@ -40717,10 +41169,27 @@ end
 
 function Creator:ChangeTranslationKey(object, newKey)
 	if Creator.Localization and Creator.Localization.Enabled then
-		local ParsedKey = string.match(newKey, "^" .. Creator.Localization.Prefix .. "(.+)")
+		local ParsedKey = typeof(newKey) == "string"
+			and string.match(newKey, "^" .. Creator.Localization.Prefix .. "(.+)")
+			or nil
+		if not ParsedKey then
+			-- A plain (non-localized) title: drop the old registration,
+			-- otherwise UpdateLang() would overwrite it on the next
+			-- language switch with the previous loc: key.
+			local alive = {}
+			for _, data in pairs(Creator.LocalizationObjects) do
+				if data and data.Object ~= object then
+					alive[#alive + 1] = data
+				end
+			end
+			Creator.LocalizationObjects = alive
+			return
+		end
 		if ParsedKey then
-			for i, data in ipairs(Creator.LocalizationObjects) do
-				if data.Object == object then
+			-- `pairs`, not `ipairs`: UpdateLang may have left holes in the
+			-- registry, and ipairs would stop before finding this object.
+			for i, data in pairs(Creator.LocalizationObjects) do
+				if data and data.Object == object then
 					data.TranslationId = ParsedKey
 					Creator.SetLangForObject(i)
 					return
@@ -40741,16 +41210,18 @@ function Creator.UpdateLang(newLang)
 		Creator.Language = newLang
 	end
 
-	for i = 1, #Creator.LocalizationObjects do
-		local data = Creator.LocalizationObjects[i]
-		-- Rework: removing an entry during a previous pass leaves a hole;
-		-- indexing `data.Object` on nil used to crash SetLanguage().
-		if data and data.Object and data.Object.Parent ~= nil then
-			Creator.SetLangForObject(i)
-		else
-			Creator.LocalizationObjects[i] = nil
+	-- Rework: compact instead of nil-ing entries in place. Leaving holes
+	-- made `#LocalizationObjects` unreliable, so new labels could overwrite
+	-- old ones and part of the UI stopped translating after a language
+	-- switch (labels stayed at their previous text / showed the raw key).
+	local alive = {}
+	for index, data in pairs(Creator.LocalizationObjects) do
+		if type(index) == "number" and data and data.Object and data.Object.Parent ~= nil then
+			Creator.SetLangForObject(index)
+			alive[#alive + 1] = data
 		end
 	end
+	Creator.LocalizationObjects = alive
 end
 
 function Creator.SetLanguage(lang)
@@ -40793,10 +41264,10 @@ function Creator.New(Name, Properties, Children)
 			and typeof(Value) == "string" then
 			local TranslationId = string.match(Value, "^" .. Creator.Localization.Prefix .. "(.+)")
 			if TranslationId then
-				local currentId = #Creator.LocalizationObjects + 1
-				Creator.LocalizationObjects[currentId] = { TranslationId = TranslationId, Object = Object }
-
-				Creator.SetLangForObject(currentId)
+				-- Always append (the registry is compacted by UpdateLang).
+				Creator.LocalizationObjects[#Creator.LocalizationObjects + 1] =
+					{ TranslationId = TranslationId, Object = Object }
+				Creator.SetLangForObject(#Creator.LocalizationObjects)
 			end
 		end
 	end
@@ -41874,6 +42345,13 @@ local Localization = {}
 local PREFIX = "rework."
 local LANGUAGES = { "ru", "en" }
 
+-- Users write "eng", "english", "rus", "RU", … — accept all of them so the
+-- panel switch never silently falls back to the first option.
+local ALIASES = {
+	ru = "ru", rus = "ru", russian = "ru", ["ru-ru"] = "ru",
+	en = "en", eng = "en", english = "en", ["en-us"] = "en", ["en-gb"] = "en",
+}
+
 local Translations = {
 	ru = {
 		["settings"] = "Настройки",
@@ -41964,8 +42442,16 @@ function Localization.Languages()
 	return table.clone(LANGUAGES)
 end
 
+--- Normalise a user-supplied language code to "ru" | "en".
+function Localization.Normalise(language)
+	if typeof(language) ~= "string" then
+		return nil
+	end
+	return ALIASES[string.lower(language)] or nil
+end
+
 function Localization.IsValid(language)
-	return language == "ru" or language == "en"
+	return Localization.Normalise(language) ~= nil
 end
 
 function Localization.Key(name)
@@ -41973,7 +42459,7 @@ function Localization.Key(name)
 end
 
 function Localization.Get(name, language)
-	local lang = Localization.IsValid(language) and language or CurrentLanguage
+	local lang = Localization.Normalise(language) or CurrentLanguage
 	local entry = Translations[lang] and Translations[lang][name]
 	if entry ~= nil then
 		return entry
@@ -42030,11 +42516,9 @@ function Localization.Install(WindUI, language)
 		end
 	end
 
-	if Localization.IsValid(language) then
-		CurrentLanguage = language
-	elseif Localization.IsValid(Creator.Language) then
-		CurrentLanguage = Creator.Language
-	end
+	CurrentLanguage = Localization.Normalise(language)
+		or Localization.Normalise(Creator.Language)
+		or "en"
 	WindUI:SetLanguage(CurrentLanguage)
 	WindUI.ReworkLanguage = CurrentLanguage
 	return true
@@ -42042,9 +42526,9 @@ end
 
 --- Switch the whole library (and every rework label) to RU or EN.
 function Localization.SetLanguage(WindUI, language)
-	local lang = tostring(language or ""):lower()
-	if not Localization.IsValid(lang) then
-		return false, "Unsupported language (use 'ru' or 'en')"
+	local lang = Localization.Normalise(language)
+	if not lang then
+		return false, "Unsupported language (use 'ru' / 'eng' or 'en')"
 	end
 	CurrentLanguage = lang
 	-- Call Creator directly: WindUI:SetLanguage delegates back to this

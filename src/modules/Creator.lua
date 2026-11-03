@@ -506,10 +506,27 @@ end
 
 function Creator:ChangeTranslationKey(object, newKey)
 	if Creator.Localization and Creator.Localization.Enabled then
-		local ParsedKey = string.match(newKey, "^" .. Creator.Localization.Prefix .. "(.+)")
+		local ParsedKey = typeof(newKey) == "string"
+			and string.match(newKey, "^" .. Creator.Localization.Prefix .. "(.+)")
+			or nil
+		if not ParsedKey then
+			-- A plain (non-localized) title: drop the old registration,
+			-- otherwise UpdateLang() would overwrite it on the next
+			-- language switch with the previous loc: key.
+			local alive = {}
+			for _, data in pairs(Creator.LocalizationObjects) do
+				if data and data.Object ~= object then
+					alive[#alive + 1] = data
+				end
+			end
+			Creator.LocalizationObjects = alive
+			return
+		end
 		if ParsedKey then
-			for i, data in ipairs(Creator.LocalizationObjects) do
-				if data.Object == object then
+			-- `pairs`, not `ipairs`: UpdateLang may have left holes in the
+			-- registry, and ipairs would stop before finding this object.
+			for i, data in pairs(Creator.LocalizationObjects) do
+				if data and data.Object == object then
 					data.TranslationId = ParsedKey
 					Creator.SetLangForObject(i)
 					return
@@ -530,16 +547,18 @@ function Creator.UpdateLang(newLang)
 		Creator.Language = newLang
 	end
 
-	for i = 1, #Creator.LocalizationObjects do
-		local data = Creator.LocalizationObjects[i]
-		-- Rework: removing an entry during a previous pass leaves a hole;
-		-- indexing `data.Object` on nil used to crash SetLanguage().
-		if data and data.Object and data.Object.Parent ~= nil then
-			Creator.SetLangForObject(i)
-		else
-			Creator.LocalizationObjects[i] = nil
+	-- Rework: compact instead of nil-ing entries in place. Leaving holes
+	-- made `#LocalizationObjects` unreliable, so new labels could overwrite
+	-- old ones and part of the UI stopped translating after a language
+	-- switch (labels stayed at their previous text / showed the raw key).
+	local alive = {}
+	for index, data in pairs(Creator.LocalizationObjects) do
+		if type(index) == "number" and data and data.Object and data.Object.Parent ~= nil then
+			Creator.SetLangForObject(index)
+			alive[#alive + 1] = data
 		end
 	end
+	Creator.LocalizationObjects = alive
 end
 
 function Creator.SetLanguage(lang)
@@ -582,10 +601,10 @@ function Creator.New(Name, Properties, Children)
 			and typeof(Value) == "string" then
 			local TranslationId = string.match(Value, "^" .. Creator.Localization.Prefix .. "(.+)")
 			if TranslationId then
-				local currentId = #Creator.LocalizationObjects + 1
-				Creator.LocalizationObjects[currentId] = { TranslationId = TranslationId, Object = Object }
-
-				Creator.SetLangForObject(currentId)
+				-- Always append (the registry is compacted by UpdateLang).
+				Creator.LocalizationObjects[#Creator.LocalizationObjects + 1] =
+					{ TranslationId = TranslationId, Object = Object }
+				Creator.SetLangForObject(#Creator.LocalizationObjects)
 			end
 		end
 	end

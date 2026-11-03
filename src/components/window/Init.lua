@@ -1454,6 +1454,12 @@ return function(Config)
 		if Window.OpenButtonMain and Window.OpenButtonMain.SetOpenState then
 			Window.OpenButtonMain:SetOpenState(false)
 		end
+		-- Rework: hide/show the button IMMEDIATELY with the state, not only
+		-- inside the animation coroutine 0.06–0.4 s later. A closed window
+		-- must always have its open button on screen (PC and phone).
+		if Window.OpenButtonMain and Window.IsOpenButtonEnabled then
+			Window.OpenButtonMain:Refresh()
+		end
 		task.spawn(function()
 			if Window.OnOpenCallback then
 				task.spawn(function()
@@ -1582,6 +1588,9 @@ return function(Config)
 		if Window.OpenButtonMain and Window.OpenButtonMain.SetOpenState then
 			Window.OpenButtonMain:SetOpenState(true)
 		end
+		if Window.OpenButtonMain and Window.IsOpenButtonEnabled then
+			Window.OpenButtonMain:Refresh()
+		end
 
 		Animations:Play(Window.UIElements.Main, "Close", {
 			Size = UDim2.new(Window.Size.X.Scale, Window.Size.X.Offset, 0, 0),
@@ -1668,6 +1677,10 @@ return function(Config)
 
 				Window.Destroyed = true
 
+				if Window.OpenButtonMain and Window.OpenButtonMain.Destroy then
+					Window.OpenButtonMain:Destroy()
+				end
+
 				task.wait(0.4)
 
 				-- Rework (bug 8): release drag connections before the guis
@@ -1705,14 +1718,12 @@ return function(Config)
 		return Window:Close():Destroy()
 	end
 
-	local LastToggle = 0
 	function Window:Toggle()
-		-- Key repeat / double tap (Activated + MouseButton1Click) protection.
-		local now = os.clock()
-		if now - LastToggle < 0.18 then
-			return Window
-		end
-		LastToggle = now
+		-- Rework: no debounce here. The open button already debounces its
+		-- own Activated/MouseButton1Click/TouchTap signals, and a global
+		-- 0.18 s lock made back-to-back programmatic toggles (or a fast
+		-- double tap on a phone) silently do nothing. Key auto-repeat is
+		-- filtered in the InputBegan handler instead.
 		if Window.Closed then
 			Window:Open()
 		else
@@ -1829,12 +1840,19 @@ return function(Config)
 		end)
 	end
 
+	local LastKeyToggle = 0
 	Creator.AddSignal(UserInputService.InputBegan, function(input, isProcessed)
 		if isProcessed or Window.Destroyed then
 			return
 		end
 		-- Supports Enum.KeyCode, string names and a list of keys.
 		if MatchesKey(input, Window.ToggleKey) then
+			-- Only filter OS key auto-repeat, not real toggles.
+			local now = os.clock()
+			if now - LastKeyToggle < 0.12 then
+				return
+			end
+			LastKeyToggle = now
 			Window:Toggle()
 		end
 	end)

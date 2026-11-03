@@ -236,7 +236,21 @@ function WindUI:SetAnimationSpeed(value)
 end
 
 function WindUI:OnThemeChange(func)
-	WindUI.OnThemeChangeFunction = func
+	if typeof(func) ~= "function" then
+		return function() end
+	end
+	-- Rework: keep every subscriber. Upstream stored ONE callback, so the
+	-- profile panel's theme row silently disabled the user's own handler.
+	WindUI.ThemeChangeSubscribers = WindUI.ThemeChangeSubscribers or {}
+	WindUI.ThemeChangeSubscribers[#WindUI.ThemeChangeSubscribers + 1] = func
+	return function()
+		for index, callback in ipairs(WindUI.ThemeChangeSubscribers or {}) do
+			if callback == func then
+				table.remove(WindUI.ThemeChangeSubscribers, index)
+				break
+			end
+		end
+	end
 end
 
 function WindUI:AddTheme(LTheme)
@@ -247,22 +261,35 @@ function WindUI:AddTheme(LTheme)
 	-- Rework (bug 5): a theme added/replaced at runtime must be applied to
 	-- already-created elements instead of only being stored in the table.
 	if WindUI.CurrentTheme == LTheme.Name or WindUI.Theme == LTheme then
-		Creator.SetTheme(LTheme)
+		WindUI:SetTheme(LTheme.Name)
 	end
 	return LTheme
 end
 
 function WindUI:SetTheme(Value)
-	if WindUI.Themes[Value] then
-		WindUI.Theme = WindUI.Themes[Value]
+	local Theme = WindUI.Themes[Value]
+	if not Theme then
+		-- Allow the pretty Name ("Monokai Pro") as well as the table key.
+		for key, candidate in pairs(WindUI.Themes) do
+			if type(candidate) == "table" and candidate.Name == Value then
+				Theme, Value = candidate, key
+				break
+			end
+		end
+	end
+	if Theme then
+		WindUI.Theme = Theme
 		WindUI.CurrentTheme = Value -- rework: custom elements read this
-		Creator.SetTheme(WindUI.Themes[Value])
+		Creator.SetTheme(Theme)
 
 		if WindUI.OnThemeChangeFunction then
 			Creator.SafeCallback(WindUI.OnThemeChangeFunction, Value)
 		end
+		for _, callback in ipairs(WindUI.ThemeChangeSubscribers or {}) do
+			Creator.SafeCallback(callback, Value)
+		end
 
-		return WindUI.Themes[Value]
+		return Theme
 	end
 	return nil
 end
@@ -271,7 +298,9 @@ function WindUI:GetThemes()
 	return WindUI.Themes
 end
 function WindUI:GetCurrentTheme()
-	return WindUI.Theme.Name
+	-- Return the *table key* accepted by SetTheme. Some themes have a
+	-- pretty Name ("Monokai Pro") that is not a valid SetTheme argument.
+	return WindUI.CurrentTheme or (WindUI.Theme and WindUI.Theme.Name) or "Dark"
 end
 function WindUI:GetTransparency()
 	return WindUI.Transparent or false
@@ -416,15 +445,14 @@ function WindUI:CreateWindow(Config)
 	end
 	WindUI.CreateWindowBusy = true
 
-	if not RunService:IsStudio() and writefile then
-		if not isfolder("WindUI") then
-			makefolder("WindUI")
-		end
-		if Config.Folder then
-			makefolder(Config.Folder)
-		else
-			makefolder(Config.Title)
-		end
+	if not RunService:IsStudio() and typeof(writefile) == "function"
+		and typeof(isfolder) == "function" and typeof(makefolder) == "function" then
+		pcall(function()
+			if not isfolder("WindUI") then
+				makefolder("WindUI")
+			end
+			makefolder(Config.Folder or Config.Title)
+		end)
 	end
 
 	Config.WindUI = WindUI
@@ -486,10 +514,22 @@ function WindUI:CreateWindow(Config)
 		end
 
 		local keyPath = (Config.Folder or "Temp") .. "/" .. Filename .. ".key"
+		-- Studio / plain Roblox have no executor filesystem API. Calling a
+		-- nil isfile()/readfile() used to crash the whole Key System dialog.
+		local function KeyFileExists(path)
+			return typeof(isfile) == "function" and isfile(path) or false
+		end
+		local function ReadKeyFile(path)
+			if typeof(readfile) ~= "function" then
+				return nil
+			end
+			local ok, contents = pcall(readfile, path)
+			return ok and contents or nil
+		end
 
 		if Config.KeySystem.KeyValidator then
-			if Config.KeySystem.SaveKey and isfile(keyPath) then
-				local savedKey = readfile(keyPath)
+			if Config.KeySystem.SaveKey and KeyFileExists(keyPath) then
+				local savedKey = ReadKeyFile(keyPath)
 				local isValid = Config.KeySystem.KeyValidator(savedKey)
 
 				if isValid then
@@ -501,8 +541,8 @@ function WindUI:CreateWindow(Config)
 				loadKeysystem()
 			end
 		elseif not Config.KeySystem.API then
-			if Config.KeySystem.SaveKey and isfile(keyPath) then
-				local savedKey = readfile(keyPath)
+			if Config.KeySystem.SaveKey and KeyFileExists(keyPath) then
+				local savedKey = ReadKeyFile(keyPath)
 				local isKey = (type(Config.KeySystem.Key) == "table") and table.find(Config.KeySystem.Key, savedKey)
 					or tostring(Config.KeySystem.Key) == tostring(savedKey)
 
@@ -515,8 +555,8 @@ function WindUI:CreateWindow(Config)
 				loadKeysystem()
 			end
 		else
-			if isfile(keyPath) then
-				local fileKey = readfile(keyPath)
+			if KeyFileExists(keyPath) then
+				local fileKey = ReadKeyFile(keyPath)
 				local isSuccess = false
 
 				for _, i in next, Config.KeySystem.API do
@@ -549,10 +589,10 @@ function WindUI:CreateWindow(Config)
 		-- terminates, even if the dialog is closed without a key. A frame
 		-- counter capped at 15 s on 60 FPS, which was far too short for a
 		-- human to fetch and type a key, so use wall-clock time instead.
-		local keyWaitStarted = os.clock()
+		local keyWaitStarted = os.time()
 		repeat
 			task.wait()
-		until CanLoadWindow or KeySystemCancelled or (os.clock() - keyWaitStarted) > 300
+		until CanLoadWindow or KeySystemCancelled or (os.time() - keyWaitStarted) > 300
 
 		if not CanLoadWindow then
 			WindUI.CreateWindowBusy = false

@@ -29,6 +29,13 @@ local Localization = {}
 local PREFIX = "rework."
 local LANGUAGES = { "ru", "en" }
 
+-- Users write "eng", "english", "rus", "RU", … — accept all of them so the
+-- panel switch never silently falls back to the first option.
+local ALIASES = {
+	ru = "ru", rus = "ru", russian = "ru", ["ru-ru"] = "ru",
+	en = "en", eng = "en", english = "en", ["en-us"] = "en", ["en-gb"] = "en",
+}
+
 local Translations = {
 	ru = {
 		["settings"] = "Настройки",
@@ -119,8 +126,16 @@ function Localization.Languages()
 	return table.clone(LANGUAGES)
 end
 
+--- Normalise a user-supplied language code to "ru" | "en".
+function Localization.Normalise(language)
+	if typeof(language) ~= "string" then
+		return nil
+	end
+	return ALIASES[string.lower(language)] or nil
+end
+
 function Localization.IsValid(language)
-	return language == "ru" or language == "en"
+	return Localization.Normalise(language) ~= nil
 end
 
 function Localization.Key(name)
@@ -128,7 +143,7 @@ function Localization.Key(name)
 end
 
 function Localization.Get(name, language)
-	local lang = Localization.IsValid(language) and language or CurrentLanguage
+	local lang = Localization.Normalise(language) or CurrentLanguage
 	local entry = Translations[lang] and Translations[lang][name]
 	if entry ~= nil then
 		return entry
@@ -185,11 +200,9 @@ function Localization.Install(WindUI, language)
 		end
 	end
 
-	if Localization.IsValid(language) then
-		CurrentLanguage = language
-	elseif Localization.IsValid(Creator.Language) then
-		CurrentLanguage = Creator.Language
-	end
+	CurrentLanguage = Localization.Normalise(language)
+		or Localization.Normalise(Creator.Language)
+		or "en"
 	WindUI:SetLanguage(CurrentLanguage)
 	WindUI.ReworkLanguage = CurrentLanguage
 	return true
@@ -197,9 +210,9 @@ end
 
 --- Switch the whole library (and every rework label) to RU or EN.
 function Localization.SetLanguage(WindUI, language)
-	local lang = tostring(language or ""):lower()
-	if not Localization.IsValid(lang) then
-		return false, "Unsupported language (use 'ru' or 'en')"
+	local lang = Localization.Normalise(language)
+	if not lang then
+		return false, "Unsupported language (use 'ru' / 'eng' or 'en')"
 	end
 	CurrentLanguage = lang
 	-- Call Creator directly: WindUI:SetLanguage delegates back to this

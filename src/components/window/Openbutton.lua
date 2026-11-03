@@ -45,6 +45,8 @@ function OpenButton.New(Window)
 		VisibleState = false,
 		WindowClosed = false,
 		DefaultTitle = Window.Title or "WindUI",
+		CustomTitle = nil,
+		Destroyed = false,
 	}
 
 	local Icon
@@ -331,21 +333,46 @@ function OpenButton.New(Window)
 		)
 	end
 
-	-- Rework: the button now has an explicit open/closed state. While the
-	-- window is open and `StayVisible` is on, it says "Close" and clicking
-	-- it really closes the menu (before it re-animated and looked broken).
-	function OpenButtonMain:SetOpenState(windowClosed)
-		local closed = windowClosed == true
-		if self.WindowClosed == closed then
+	-- Rework: the button has an explicit open/closed state. Writing a raw
+	-- `loc:rework.open` string into Title.Text used to display the key
+	-- itself on the button, and switching language never updated it.
+	-- Register the key through Creator so it resolves AND stays in sync.
+	function OpenButtonMain:RefreshTitle()
+		if self.Destroyed or not Title then
 			return self
 		end
-		self.WindowClosed = closed
-		if self.StayVisible then
-			Title.Text = Localization.Key(closed and "open" or "close")
+		local key
+		if self.StayVisible and self.WindowClosed and self.CustomTitle then
+			-- A real toggle, but respect a user-supplied label for "open".
+			Title.Text = self.CustomTitle
+			pcall(function()
+				Creator:ChangeTranslationKey(Title, self.CustomTitle)
+			end)
+			return self
+		elseif self.StayVisible then
+			key = self.WindowClosed and "open" or "close"
+		elseif self.CustomTitle then
+			Title.Text = self.CustomTitle
+			pcall(function()
+				Creator:ChangeTranslationKey(Title, self.CustomTitle)
+			end)
+			return self
 		else
-			Title.Text = self.DefaultTitle or "WindUI"
+			key = "open"
 		end
+		Title.Text = Localization.Get(key)
+		pcall(function()
+			Creator:ChangeTranslationKey(Title, Localization.Key(key))
+		end)
 		return self
+	end
+
+	function OpenButtonMain:SetOpenState(windowClosed)
+		local closed = windowClosed == true
+		self.WindowClosed = closed
+		-- Always refresh: StayVisible / language may have changed even when
+		-- the window state did not.
+		return self:RefreshTitle()
 	end
 
 	function OpenButtonMain:IsWindowOpen()
@@ -353,7 +380,7 @@ function OpenButton.New(Window)
 	end
 
 	function OpenButtonMain:ShouldShow()
-		if not self.Enabled or Window.Destroyed then
+		if self.Destroyed or not self.Enabled or Window.Destroyed then
 			return false
 		end
 		if self.OnlyMobile and Window.IsMobile == false then
@@ -366,6 +393,9 @@ function OpenButton.New(Window)
 	end
 
 	function OpenButtonMain:Visible(value)
+		if self.Destroyed then
+			return self
+		end
 		if value == nil then
 			value = self:ShouldShow()
 		end
@@ -446,10 +476,12 @@ function OpenButton.New(Window)
 
 	function OpenButtonMain:SetTitle(text)
 		if Title and text then
-			Title.Text = tostring(text)
+			self.CustomTitle = tostring(text)
+			Title.Text = self.CustomTitle
 			pcall(function()
-				Creator:ChangeTranslationKey(Title, tostring(text))
+				Creator:ChangeTranslationKey(Title, self.CustomTitle)
 			end)
+			self:RefreshTitle()
 		end
 		return self
 	end
@@ -573,7 +605,36 @@ function OpenButton.New(Window)
 		end)
 	end)
 
+	-- Keep the label in sync when the language is switched from the panel.
+	OpenButtonMain.LanguageUnsubscribe = Localization.OnChange(function()
+		if not OpenButtonMain.Destroyed then
+			OpenButtonMain:RefreshTitle()
+		end
+	end)
+
+	function OpenButtonMain:Destroy()
+		if self.Destroyed then
+			return
+		end
+		self.Destroyed = true
+		if self.LanguageUnsubscribe then
+			pcall(self.LanguageUnsubscribe)
+			self.LanguageUnsubscribe = nil
+		end
+		if DragModule and DragModule.Destroy then
+			pcall(function()
+				DragModule:Destroy()
+			end)
+		end
+		if Container and Container.Destroy then
+			pcall(function()
+				Container:Destroy()
+			end)
+		end
+	end
+
 	OpenButtonMain:SetScale(1)
+	OpenButtonMain:RefreshTitle()
 	return OpenButtonMain
 end
 

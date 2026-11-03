@@ -5,7 +5,29 @@ local RunService = cloneref(game:GetService("RunService"))
 local HttpService = cloneref(game:GetService("HttpService"))
 local Creator = require("../modules/Creator")
 
-local Window 
+-- Rework: executor filesystem APIs are optional. Calling a nil
+-- IsFolder()/IsFile()/ReadFile() used to crash window creation in Studio
+-- and in executors that only expose writefile().
+local function IsFolder(path)
+    return typeof(isfolder) == "function" and isfolder(path) or false
+end
+local function MakeFolder(path)
+    if typeof(makefolder) == "function" then
+        pcall(makefolder, path)
+    end
+end
+local function IsFile(path)
+    return typeof(isfile) == "function" and isfile(path) or false
+end
+local function ReadFile(path)
+    if typeof(readfile) ~= "function" then
+        return nil
+    end
+    local ok, contents = pcall(readfile, path)
+    return ok and contents or nil
+end
+
+local Window
 
 local ConfigManager
 ConfigManager = {
@@ -170,15 +192,15 @@ function ConfigManager:Init(WindowTable)
     ConfigManager.Folder = Window.Folder
     ConfigManager.Path = "WindUI/" .. tostring(ConfigManager.Folder) .. "/config/"
     
-    if not isfolder(ConfigManager.Path) then
-        makefolder(ConfigManager.Path)
+    if not IsFolder(ConfigManager.Path) then
+        MakeFolder(ConfigManager.Path)
     end
     
     local files = ConfigManager:AllConfigs()
     
     for _, f in next, files do
-        if isfile and readfile and isfile(f .. ".json") then
-            ConfigManager.Configs[f] = readfile(f .. ".json")
+        if IsFile(f .. ".json") then
+            ConfigManager.Configs[f] = ReadFile(f .. ".json")
         end
     end
     
@@ -196,8 +218,8 @@ function ConfigManager:SetPath(customPath)
         ConfigManager.Path = customPath .. "/"
     end
     
-    if not isfolder(ConfigManager.Path) then
-        makefolder(ConfigManager.Path)
+    if not IsFolder(ConfigManager.Path) then
+        MakeFolder(ConfigManager.Path)
     end
     
     return true
@@ -292,16 +314,16 @@ function ConfigManager:CreateConfig(configFilename, autoload)
     end
     
     function ConfigModule:Load()
-        if isfile and not isfile(ConfigModule.Path) then 
+        if not IsFile(ConfigModule.Path) then 
             return false, "Config file does not exist" 
         end
         
         local success, loadData = pcall(function()
-            local readfile = readfile or function() 
-                warn("[ WindUI.ConfigManager ] The config system doesn't work in the studio.") 
-                return nil 
+            local contents = ReadFile(ConfigModule.Path)
+            if not contents then
+                return nil
             end
-            return HttpService:JSONDecode(readfile(ConfigModule.Path))
+            return HttpService:JSONDecode(contents)
         end)
         
         if not success then
@@ -342,7 +364,7 @@ function ConfigManager:CreateConfig(configFilename, autoload)
             return false, "delfile function is not available"
         end
         
-        if not isfile(ConfigModule.Path) then
+        if not IsFile(ConfigModule.Path) then
             return false, "Config file does not exist"
         end
         
@@ -372,9 +394,9 @@ function ConfigManager:CreateConfig(configFilename, autoload)
     end
     
     
-    if isfile(ConfigModule.Path) then
+    if IsFile(ConfigModule.Path) then
         local success, configData = pcall(function()
-            return HttpService:JSONDecode(readfile(ConfigModule.Path))
+            return HttpService:JSONDecode(ReadFile(ConfigModule.Path))
         end)
         
         if success and configData and configData.__autoload then
@@ -425,7 +447,7 @@ function ConfigManager:DeleteConfig(configName)
     
     local configPath = ConfigManager.Path .. configName .. ".json"
     
-    if not isfile(configPath) then
+    if not IsFile(configPath) then
         return false, "Config file does not exist"
     end
     
@@ -450,8 +472,8 @@ function ConfigManager:AllConfigs()
     if not listfiles then return {} end
     
     local files = {}
-    if not isfolder(ConfigManager.Path) then
-        makefolder(ConfigManager.Path)
+    if not IsFolder(ConfigManager.Path) then
+        MakeFolder(ConfigManager.Path)
         return files
     end
     
