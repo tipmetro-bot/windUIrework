@@ -546,12 +546,13 @@ function WindUI:CreateWindow(Config)
 		end
 
 		-- Bounded wait: yields a frame at a time (no busy spin) and always
-		-- terminates, even if the dialog is closed without a key.
-		local frames = 0
+		-- terminates, even if the dialog is closed without a key. A frame
+		-- counter capped at 15 s on 60 FPS, which was far too short for a
+		-- human to fetch and type a key, so use wall-clock time instead.
+		local keyWaitStarted = os.clock()
 		repeat
 			task.wait()
-			frames += 1
-		until CanLoadWindow or KeySystemCancelled or frames > 900
+		until CanLoadWindow or KeySystemCancelled or (os.clock() - keyWaitStarted) > 300
 
 		if not CanLoadWindow then
 			WindUI.CreateWindowBusy = false

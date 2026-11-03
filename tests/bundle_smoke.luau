@@ -437,6 +437,19 @@ if not iconsAdded or WindUI.Creator.Icon("smokepack:smoke") == nil then
 	error("AddIcons on a vendored/flat pack failed", 0)
 end
 
+-- Key System strings must exist in both dictionaries (RU/EN).
+WindUI:SetLanguage("en")
+if WindUI.ReworkLocalization.Get("keysystem.invalid") ~= "Invalid key." then
+	error("EN dictionary has no invalid-key message", 0)
+end
+if WindUI.ReworkLocalization.Get("keysystem.nolink") ~= "No key link configured (KeySystem.URL / KeySystem.API)." then
+	error("EN dictionary has no no-link message", 0)
+end
+WindUI:SetLanguage("ru")
+if WindUI.ReworkLocalization.Get("keysystem.nolink") ~= "Ссылка на ключ не задана (KeySystem.URL / KeySystem.API)." then
+	error("RU dictionary has no no-link message", 0)
+end
+
 ----------------------------------------------------------------------
 -- UI smoke: window + zero slider + profile panel, all under the mock.
 -- Animations are disabled so task.delay/task.spawn helpers stay finite.

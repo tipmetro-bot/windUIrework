@@ -471,7 +471,7 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 		CreateButton(Localization.Key("keysystem.get"), "key", function()
 			Config.WindUI:Notify({
 				Title = Localization.Get("keysystem.title"),
-				Content = "No key link configured (KeySystem.URL / KeySystem.API).",
+				Content = Localization.Get("keysystem.nolink"),
 				Icon = "key",
 			})
 		end, "Secondary", ButtonsContainer.Frame)
@@ -520,6 +520,14 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 					task.wait(0.4)
 					Finish(true)
 				end
+			else
+				-- Rework: upstream silently ignored a wrong static key, so the
+				-- "Check Key" button looked broken. Tell the user instead.
+				Config.WindUI:Notify({
+					Title = "Key System. Error",
+					Content = Localization.Get("keysystem.invalid"),
+					Icon = "triangle-alert",
+				})
 			end
 		else
 			local isSuccess, result

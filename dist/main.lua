@@ -597,12 +597,13 @@ function WindUI:CreateWindow(Config)
 		end
 
 		-- Bounded wait: yields a frame at a time (no busy spin) and always
-		-- terminates, even if the dialog is closed without a key.
-		local frames = 0
+		-- terminates, even if the dialog is closed without a key. A frame
+		-- counter capped at 15 s on 60 FPS, which was far too short for a
+		-- human to fetch and type a key, so use wall-clock time instead.
+		local keyWaitStarted = os.clock()
 		repeat
 			task.wait()
-			frames += 1
-		until CanLoadWindow or KeySystemCancelled or frames > 900
+		until CanLoadWindow or KeySystemCancelled or (os.clock() - keyWaitStarted) > 300
 
 		if not CanLoadWindow then
 			WindUI.CreateWindowBusy = false
@@ -25680,7 +25681,7 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 		CreateButton(Localization.Key("keysystem.get"), "key", function()
 			Config.WindUI:Notify({
 				Title = Localization.Get("keysystem.title"),
-				Content = "No key link configured (KeySystem.URL / KeySystem.API).",
+				Content = Localization.Get("keysystem.nolink"),
 				Icon = "key",
 			})
 		end, "Secondary", ButtonsContainer.Frame)
@@ -25729,6 +25730,14 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 					task.wait(0.4)
 					Finish(true)
 				end
+			else
+				-- Rework: upstream silently ignored a wrong static key, so the
+				-- "Check Key" button looked broken. Tell the user instead.
+				Config.WindUI:Notify({
+					Title = "Key System. Error",
+					Content = Localization.Get("keysystem.invalid"),
+					Icon = "triangle-alert",
+				})
 			end
 		else
 			local isSuccess, result
@@ -41884,6 +41893,7 @@ local Translations = {
 		["keysystem.exit"] = "Выход",
 		["keysystem.invalid"] = "Неверный ключ.",
 		["keysystem.copied"] = "Ссылка на ключ скопирована.",
+		["keysystem.nolink"] = "Ссылка на ключ не задана (KeySystem.URL / KeySystem.API).",
 		["loading.title"] = "Загрузка",
 		["loading.status"] = "Подготовка интерфейса…",
 		["loading.ready"] = "Готово",
@@ -41923,6 +41933,7 @@ local Translations = {
 		["keysystem.exit"] = "Exit",
 		["keysystem.invalid"] = "Invalid key.",
 		["keysystem.copied"] = "Key link copied to clipboard.",
+		["keysystem.nolink"] = "No key link configured (KeySystem.URL / KeySystem.API).",
 		["loading.title"] = "Loading",
 		["loading.status"] = "Preparing interface…",
 		["loading.ready"] = "Ready",

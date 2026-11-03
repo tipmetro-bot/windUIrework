@@ -48,11 +48,13 @@
 
 ```lua
 local WindUI = loadstring(game:HttpGet(
-    "https://raw.githubusercontent.com/tipmetro-bot/windUIrework/refs/heads/arena/1e7c32a5-winduirework/dist/main.lua"
+    "https://raw.githubusercontent.com/tipmetro-bot/windUIrework/refs/heads/arena/6e86f6ad-winduirework/dist/main.lua"
 ))()
 ```
 
-> Если ветка влита в `main`, используйте `.../refs/heads/main/dist/main.lua`.
+> Пока PR #2 не влит в `main`, берите бандл с ветки реворка. После мержа
+> используйте `.../refs/heads/main/dist/main.lua`. Готовый скрипт с Key System
+> (ключ `test`) лежит в `examples/rework_example.client.lua`.
 > Файл `dist/main.lua` — это готовый бандл всех модулей из `src/` (включая иконки), возвращает таблицу `WindUI`.
 
 ### Вариант 2 — Rojo / Studio
@@ -357,7 +359,23 @@ local Window = WindUI:CreateWindow({
 
 `Loading = false` (по умолчанию) не создаёт вообще ни одного GUI и не вешает соединений. `WindUI:SetLoadingEnabled(bool)` и `Panel:SetValue("ReworkLoading", bool)` переключают оверлей на лету.
 
-**Key System** теперь всегда имеет две нижние кнопки — **Get Key** и **Check Key** (плюс «Выход»), локализованные вместе с интерфейсом. Закрытие диалога больше не оставляет скрипт в бесконечном `repeat task.wait()`, а все соединения диалога отключаются при завершении.
+**Key System** теперь всегда имеет две нижние кнопки — **Get Key** и **Check Key** (плюс «Выход»), локализованные вместе с интерфейсом. Закрытие диалога больше не оставляет скрипт в бесконечном `repeat task.wait()` (таймаут 5 минут по времени, не по кадрам), все соединения диалога отключаются при завершении, а неверный ключ показывает уведомление вместо молчания.
+
+Минимальный вариант с тестовым ключом `test` (полностью — в `examples/rework_example.client.lua`):
+
+```lua
+local Window = WindUI:CreateWindow({
+    Title = "My Hub",
+    Folder = "MyHub",
+    KeySystem = {
+        Title = "My Hub · Key System",
+        Note  = "Тестовый ключ: <b>test</b>",
+        Key   = { "test" },   -- рабочий ключ
+        SaveKey = false,      -- спрашивать при каждом запуске
+    },
+})
+if not Window then return end -- ключ не ввели / «Выход»
+```
 
 ---
 
