@@ -142,15 +142,72 @@ function Creator.AddSignal(Signal, Function)
 	return conn
 end
 
+-- Rework: named connection groups so a Tab / element / window can be
+-- destroyed without killing connections owned by other objects.
+function Creator.AddScopedSignal(group, Signal, Function)
+	local conn = Signal:Connect(Function)
+	Creator.ScopedSignals = Creator.ScopedSignals or {}
+	Creator.ScopedSignals[group] = Creator.ScopedSignals[group] or {}
+	local bucket = Creator.ScopedSignals[group]
+	bucket[#bucket + 1] = conn
+	return conn
+end
+
+function Creator.DisconnectGroup(group)
+	local bucket = Creator.ScopedSignals and Creator.ScopedSignals[group]
+	if not bucket then
+		return 0
+	end
+	local count = 0
+	for index = #bucket, 1, -1 do
+		local conn = bucket[index]
+		bucket[index] = nil
+		if conn then
+			pcall(function()
+				conn:Disconnect()
+			end)
+			count += 1
+		end
+	end
+	Creator.ScopedSignals[group] = nil
+	return count
+end
+
+-- Rework: the upstream loop used `next` while removing from the same
+-- table, so every second connection survived and leaked forever.
 function Creator.DisconnectAll()
-	for idx, signal in next, Creator.Signals do
-		local Connection = table.remove(Creator.Signals, idx)
-		Connection:Disconnect()
+	for index = #Creator.Signals, 1, -1 do
+		local conn = Creator.Signals[index]
+		Creator.Signals[index] = nil
+		if conn then
+			pcall(function()
+				conn:Disconnect()
+			end)
+		end
+	end
+	if Creator.ScopedSignals then
+		for group in pairs(Creator.ScopedSignals) do
+			Creator.DisconnectGroup(group)
+		end
 	end
 end
 
+-- Rework: config loading must apply saved values WITHOUT firing user
+-- callbacks a second time. `SuspendCallbacks` wraps the whole load.
+Creator.CallbackSuppressDepth = 0
+
+function Creator.SuspendCallbacks(fn, ...)
+	Creator.CallbackSuppressDepth += 1
+	local results = table.pack(pcall(fn, ...))
+	Creator.CallbackSuppressDepth = math.max(0, Creator.CallbackSuppressDepth - 1)
+	if not results[1] then
+		warn("[ WindUI ] Suppressed callback block failed: " .. tostring(results[2]))
+	end
+	return table.unpack(results, 2)
+end
+
 function Creator.SafeCallback(Function, ...)
-	if not Function then
+	if not Function or Creator.CallbackSuppressDepth > 0 then
 		return
 	end
 
@@ -449,10 +506,27 @@ end
 
 function Creator:ChangeTranslationKey(object, newKey)
 	if Creator.Localization and Creator.Localization.Enabled then
-		local ParsedKey = string.match(newKey, "^" .. Creator.Localization.Prefix .. "(.+)")
+		local ParsedKey = typeof(newKey) == "string"
+			and string.match(newKey, "^" .. Creator.Localization.Prefix .. "(.+)")
+			or nil
+		if not ParsedKey then
+			-- A plain (non-localized) title: drop the old registration,
+			-- otherwise UpdateLang() would overwrite it on the next
+			-- language switch with the previous loc: key.
+			local alive = {}
+			for _, data in pairs(Creator.LocalizationObjects) do
+				if data and data.Object ~= object then
+					alive[#alive + 1] = data
+				end
+			end
+			Creator.LocalizationObjects = alive
+			return
+		end
 		if ParsedKey then
-			for i, data in ipairs(Creator.LocalizationObjects) do
-				if data.Object == object then
+			-- `pairs`, not `ipairs`: UpdateLang may have left holes in the
+			-- registry, and ipairs would stop before finding this object.
+			for i, data in pairs(Creator.LocalizationObjects) do
+				if data and data.Object == object then
 					data.TranslationId = ParsedKey
 					Creator.SetLangForObject(i)
 					return
@@ -473,14 +547,18 @@ function Creator.UpdateLang(newLang)
 		Creator.Language = newLang
 	end
 
-	for i = 1, #Creator.LocalizationObjects do
-		local data = Creator.LocalizationObjects[i]
-		if data.Object and data.Object.Parent ~= nil then
-			Creator.SetLangForObject(i)
-		else
-			Creator.LocalizationObjects[i] = nil
+	-- Rework: compact instead of nil-ing entries in place. Leaving holes
+	-- made `#LocalizationObjects` unreliable, so new labels could overwrite
+	-- old ones and part of the UI stopped translating after a language
+	-- switch (labels stayed at their previous text / showed the raw key).
+	local alive = {}
+	for index, data in pairs(Creator.LocalizationObjects) do
+		if type(index) == "number" and data and data.Object and data.Object.Parent ~= nil then
+			Creator.SetLangForObject(index)
+			alive[#alive + 1] = data
 		end
 	end
+	Creator.LocalizationObjects = alive
 end
 
 function Creator.SetLanguage(lang)
@@ -517,13 +595,16 @@ function Creator.New(Name, Properties, Children)
 		if Name ~= "ThemeTag" then
 			Object[Name] = Value
 		end
-		if Creator.Localization and Creator.Localization.Enabled and Name == "Text" then
+		-- Rework: `Text` is not always a string; string.match() used to
+		-- throw as soon as localization was enabled.
+		if Creator.Localization and Creator.Localization.Enabled and Name == "Text"
+			and typeof(Value) == "string" then
 			local TranslationId = string.match(Value, "^" .. Creator.Localization.Prefix .. "(.+)")
 			if TranslationId then
-				local currentId = #Creator.LocalizationObjects + 1
-				Creator.LocalizationObjects[currentId] = { TranslationId = TranslationId, Object = Object }
-
-				Creator.SetLangForObject(currentId)
+				-- Always append (the registry is compacted by UpdateLang).
+				Creator.LocalizationObjects[#Creator.LocalizationObjects + 1] =
+					{ TranslationId = TranslationId, Object = Object }
+				Creator.SetLangForObject(#Creator.LocalizationObjects)
 			end
 		end
 	end
@@ -634,33 +715,65 @@ function Creator.Drag(mainFrame, dragFrames, ondrag)
 	local dragging = false
 	local dragStart, startPos
 	local activeInput = nil
+	local connections = {}
 
 	local DragModule = {
 		CanDraggable = true,
+		Destroyed = false,
 	}
 
 	if not dragFrames or typeof(dragFrames) ~= "table" then
 		dragFrames = { mainFrame }
 	end
 
+	local function track(signal, fn)
+		local conn = signal:Connect(fn)
+		connections[#connections + 1] = conn
+		return conn
+	end
+
+	-- Rework (bug 6): AbsolutePosition is measured in the ScreenGui's
+	-- coordinate space; GuiService:GetGuiInset() is the difference to the
+	-- pointer's screen space. Ignoring it is what broke dragging on phones.
+	local function ClampToViewport(position)
+		local ok, result = pcall(function()
+			local camera = workspace.CurrentCamera
+			local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+			local inset = cloneref(game:GetService("GuiService")):GetGuiInset()
+			local size = mainFrame.AbsoluteSize
+			local halfX = (size.X > 0 and size.X / 2 or 200)
+			local halfY = (size.Y > 0 and size.Y / 2 or 150)
+			local minX = -viewport.X / 2 + halfX
+			local maxX = viewport.X / 2 - halfX
+			local minY = -viewport.Y / 2 + halfY + inset.Y
+			local maxY = viewport.Y / 2 - halfY
+			return UDim2.new(
+				0.5,
+				math.clamp(position.X.Offset, minX, maxX),
+				0.5,
+				math.clamp(position.Y.Offset, minY, maxY)
+			)
+		end)
+		return ok and result or position
+	end
+
 	local function update(input)
-		if not dragging or not DragModule.CanDraggable then
+		if not dragging or not DragModule.CanDraggable or DragModule.Destroyed then
 			return
 		end
 
 		local delta = input.Position - dragStart
-		Creator.Tween(mainFrame, 0.02, {
-			Position = UDim2.new(
-				startPos.X.Scale,
-				startPos.X.Offset + delta.X,
-				startPos.Y.Scale,
-				startPos.Y.Offset + delta.Y
-			),
-		}):Play()
+		local target = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
+		Creator.Tween(mainFrame, 0.02, { Position = ClampToViewport(target) }):Play()
 	end
 
 	for _, dragFrame in pairs(dragFrames) do
-		dragFrame.InputBegan:Connect(function(input)
+		track(dragFrame.InputBegan, function(input)
 			if not DragModule.CanDraggable or dragging then
 				return
 			end
@@ -688,7 +801,7 @@ function Creator.Drag(mainFrame, dragFrames, ondrag)
 		end)
 	end
 
-	UserInputService.InputChanged:Connect(function(input)
+	track(UserInputService.InputChanged, function(input)
 		if not dragging then
 			return
 		end
@@ -707,7 +820,7 @@ function Creator.Drag(mainFrame, dragFrames, ondrag)
 		end
 	end)
 
-	UserInputService.InputEnded:Connect(function(input)
+	track(UserInputService.InputEnded, function(input)
 		if not dragging or WindUI.CurrentInput ~= CurInput then
 			return
 		end
@@ -731,7 +844,29 @@ function Creator.Drag(mainFrame, dragFrames, ondrag)
 	end)
 
 	function DragModule:Set(v)
-		DragModule.CanDraggable = v
+		DragModule.CanDraggable = v == true
+	end
+
+	-- Rework (bug 8): all UIS / GuiObject connections must be released.
+	function DragModule:Destroy()
+		if DragModule.Destroyed then
+			return
+		end
+		DragModule.Destroyed = true
+		dragging = false
+		activeInput = nil
+		if WindUI.CurrentInput == CurInput then
+			WindUI.CurrentInput = nil
+		end
+		for _, conn in ipairs(connections) do
+			pcall(function()
+				conn:Disconnect()
+			end)
+		end
+		table.clear(connections)
+		if ondrag and typeof(ondrag) == "function" then
+			pcall(ondrag, false, nil)
+		end
 	end
 
 	return DragModule

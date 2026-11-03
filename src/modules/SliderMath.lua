@@ -58,10 +58,25 @@ function SliderMath.Normalise(Config)
 		Min = Min,
 		Max = Max,
 		Step = Step,
-		IsFloat = (Step % 1) ~= 0,
+		-- Rework (bug 4): fractional Min/Max count as float too, otherwise
+		-- a Step = 1 range starting at 0.5 was rounded to integers.
+		IsFloat = (Step % 1) ~= 0 or (Min % 1) ~= 0 or (Max % 1) ~= 0,
 		Default = ToNumber(rawDefault, Min),
 	}
 end
+
+-- Number of decimals needed to represent a step without float noise
+-- (0.1 + 0.2 = 0.30000000000000004 otherwise).
+local function Precision(step)
+	for decimals = 0, 6 do
+		local scaled = step * (10 ^ decimals)
+		if math.abs(scaled - math.floor(scaled + 0.5)) < 1e-9 then
+			return decimals
+		end
+	end
+	return 2
+end
+SliderMath.Precision = Precision
 
 function SliderMath.Range(range)
 	return math.max(range.Max - range.Min, 1e-9)
@@ -73,15 +88,24 @@ end
 
 function SliderMath.Format(value, range)
 	value = ToNumber(value, range.Min)
-	if range.IsFloat then
-		return ToNumber(string.format("%.2f", value), value)
+	-- Rework (bug 4): round only to the precision implied by Min/Max/Step
+	-- so `Step = 0.001` and `Min = 0.5` keep their decimals, while a plain
+	-- integer range still snaps to whole numbers.
+	local decimals = math.max(
+		Precision(range.Step or 1),
+		Precision(range.Min or 0),
+		Precision(range.Max or 0)
+	)
+	if decimals > 0 or range.IsFloat then
+		return ToNumber(string.format("%." .. decimals .. "f", value), value)
 	end
 	return math.floor(value + 0.5)
 end
 
 function SliderMath.Calculate(rawValue, range)
 	rawValue = ToNumber(rawValue, range.Min)
-	local snapped = range.Min + math.floor((rawValue - range.Min) / range.Step + 0.5) * range.Step
+	local step = (range.Step and range.Step > 0 and range.Step) or 1
+	local snapped = range.Min + math.floor((rawValue - range.Min) / step + 0.5) * step
 	return math.clamp(SliderMath.Format(snapped, range), range.Min, range.Max)
 end
 
@@ -109,7 +133,7 @@ function SliderMath.SetStep(range, newStep)
 		step = 1
 	end
 	range.Step = math.min(step, SliderMath.Range(range))
-	range.IsFloat = (range.Step % 1) ~= 0
+	range.IsFloat = (range.Step % 1) ~= 0 or (range.Min % 1) ~= 0 or (range.Max % 1) ~= 0
 	return range.Step
 end
 

@@ -1,8 +1,19 @@
 return function(Creator)
 	return {
-		-- More soon!
-
+		-- Rework (bug 5): theme keys used by elements but missing from the
+		-- fallback table resolved to nil, so AddTheme()/custom themes never
+		-- coloured those objects.
 		Primary = "Icon",
+
+		Layer = "ElementBackground",
+		PlaceholderText = "Placeholder",
+		WindowShadowTransparency = 0.7,
+		AcrylicMain = "Background",
+		AcrylicBorder = "White",
+		AcrylicBorderTransparency = 0.85,
+		AcrylicGradient = "Accent",
+		AcrylicNoise = "White",
+		AcrylicNoiseTransparency = 0.95,
 
 		White = Color3.new(1, 1, 1),
 		Black = Color3.new(0, 0, 0),

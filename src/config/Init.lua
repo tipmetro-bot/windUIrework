@@ -3,8 +3,31 @@ local cloneref = (cloneref or clonereference or function(instance) return instan
 
 local RunService = cloneref(game:GetService("RunService"))
 local HttpService = cloneref(game:GetService("HttpService"))
+local Creator = require("../modules/Creator")
 
-local Window 
+-- Rework: executor filesystem APIs are optional. Calling a nil
+-- IsFolder()/IsFile()/ReadFile() used to crash window creation in Studio
+-- and in executors that only expose writefile().
+local function IsFolder(path)
+    return typeof(isfolder) == "function" and isfolder(path) or false
+end
+local function MakeFolder(path)
+    if typeof(makefolder) == "function" then
+        pcall(makefolder, path)
+    end
+end
+local function IsFile(path)
+    return typeof(isfile) == "function" and isfile(path) or false
+end
+local function ReadFile(path)
+    if typeof(readfile) ~= "function" then
+        return nil
+    end
+    local ok, contents = pcall(readfile, path)
+    return ok and contents or nil
+end
+
+local Window
 
 local ConfigManager
 ConfigManager = {
@@ -14,28 +37,60 @@ ConfigManager = {
     Parser = {
         Colorpicker = {
             Save = function(obj)
+                -- Rework: `Default` holds the CURRENT colour (Update writes
+                -- it back). Guard the type and keep transparency = 0.
+                local color = obj.Default
+                if typeof(color) ~= "Color3" then
+                    color = Color3.new(1, 1, 1)
+                end
+                local transparency = obj.Transparency
+                if transparency == nil and obj.GetTransparency then
+                    transparency = obj:GetTransparency()
+                end
                 return {
                     __type = obj.__type,
-                    value = obj.Default:ToHex(),
-                    transparency = obj.Transparency or nil,
+                    value = color:ToHex(),
+                    transparency = transparency,
                 }
             end,
             Load = function(element, data)
                 if element and element.Update then
-                    element:Update(Color3.fromHex(data.value), data.transparency or nil)
+                    local hex = tostring(data.value or "FFFFFF"):gsub("^#", "")
+                    -- Color3.fromHex REQUIRES the leading '#'; upstream passed
+                    -- the bare hex string and threw for every saved colour.
+                    local ok, color = pcall(function()
+                        return Color3.fromHex("#" .. hex)
+                    end)
+                    if ok then
+                        element:Update(color, data.transparency, true)
+                    end
                 end
             end
         },
         Dropdown = {
             Save = function(obj)
+                -- Rework: read the live value (dropdowns keep it in
+                -- `Value`, not in `Default`). `0`/false stay valid.
+                local value = obj.Value
+                if value == nil and obj.GetValue then
+                    value = obj:GetValue()
+                end
+                if value ~= nil and typeof(value) == "table" then
+                    local copy = {}
+                    for key, item in pairs(value) do
+                        copy[key] = typeof(item) == "table" and (item.Title or item[1]) or item
+                    end
+                    value = copy
+                end
                 return {
                     __type = obj.__type,
-                    value = obj.Value,
+                    value = value,
                 }
             end,
             Load = function(element, data)
                 if element and element.Select then
-                    element:Select(data.value)
+                    -- silent = true -> no duplicate Callback on load
+                    element:Select(data.value, true)
                 end
             end
         },
@@ -48,7 +103,7 @@ ConfigManager = {
             end,
             Load = function(element, data)
                 if element and element.Set then
-                    element:Set(data.value)
+                    element:Set(data.value, false)
                 end
             end
         },
@@ -86,8 +141,9 @@ ConfigManager = {
                     if value == nil then
                         value = 0
                     end
-                    -- force = true -> a saved 0 is applied and the callback runs.
-                    element:Set(value, nil, true)
+                    -- force = true -> a saved 0 is applied; silent = true
+                    -- -> no duplicate Callback while loading a config.
+                    element:Set(value, nil, true, true)
                 end
             end
         },
@@ -100,7 +156,22 @@ ConfigManager = {
             end,
             Load = function(element, data)
                 if element and element.Set then
-                    element:Set(data.value)
+                    -- isCallback = false -> no duplicate Callback
+                    element:Set(data.value, false)
+                end
+            end
+        },
+        -- Rework: profile-panel Choice rows (language / theme selector).
+        Choice = {
+            Save = function(obj)
+                return {
+                    __type = obj.__type,
+                    value = obj.Value,
+                }
+            end,
+            Load = function(element, data)
+                if element and element.Set then
+                    element:Set(data.value, false)
                 end
             end
         },
@@ -121,15 +192,15 @@ function ConfigManager:Init(WindowTable)
     ConfigManager.Folder = Window.Folder
     ConfigManager.Path = "WindUI/" .. tostring(ConfigManager.Folder) .. "/config/"
     
-    if not isfolder(ConfigManager.Path) then
-        makefolder(ConfigManager.Path)
+    if not IsFolder(ConfigManager.Path) then
+        MakeFolder(ConfigManager.Path)
     end
     
     local files = ConfigManager:AllConfigs()
     
     for _, f in next, files do
-        if isfile and readfile and isfile(f .. ".json") then
-            ConfigManager.Configs[f] = readfile(f .. ".json")
+        if IsFile(f .. ".json") then
+            ConfigManager.Configs[f] = ReadFile(f .. ".json")
         end
     end
     
@@ -147,8 +218,8 @@ function ConfigManager:SetPath(customPath)
         ConfigManager.Path = customPath .. "/"
     end
     
-    if not isfolder(ConfigManager.Path) then
-        makefolder(ConfigManager.Path)
+    if not IsFolder(ConfigManager.Path) then
+        MakeFolder(ConfigManager.Path)
     end
     
     return true
@@ -178,6 +249,33 @@ function ConfigManager:CreateConfig(configFilename, autoload)
     function ConfigModule:Register(Name, Element)
         ConfigModule.Elements[Name] = Element
     end
+
+    -- Rework (bug 1): a Flag can be assigned AFTER the element was created,
+    -- or a config can be created before the tabs are built. Rescan the
+    -- window's element list on every Save/Load instead of trusting the
+    -- registration order.
+    function ConfigModule:RegisterAll()
+        if Window and Window.PendingFlags then
+            for flag, element in pairs(Window.PendingFlags) do
+                ConfigModule.Elements[flag] = element
+            end
+        end
+        if Window and Window.AllElements then
+            for _, element in pairs(Window.AllElements) do
+                if typeof(element) == "table" and element.Flag ~= nil then
+                    ConfigModule.Elements[tostring(element.Flag)] = element
+                end
+            end
+        end
+        return ConfigModule
+    end
+
+    function ConfigModule:RegisterFlag(flag, element)
+        if flag ~= nil and typeof(element) == "table" then
+            ConfigModule.Elements[tostring(flag)] = element
+        end
+        return ConfigModule
+    end
     
     function ConfigModule:Set(key, value)
         ConfigModule.CustomData[key] = value
@@ -192,11 +290,7 @@ function ConfigManager:CreateConfig(configFilename, autoload)
     end
     
     function ConfigModule:Save()
-        if Window.PendingFlags then
-            for flag, element in next, Window.PendingFlags do
-                ConfigModule:Register(flag, element)
-            end
-        end
+        ConfigModule:RegisterAll()
         
         local saveData = {
             __version = ConfigModule.Version,
@@ -220,16 +314,16 @@ function ConfigManager:CreateConfig(configFilename, autoload)
     end
     
     function ConfigModule:Load()
-        if isfile and not isfile(ConfigModule.Path) then 
+        if not IsFile(ConfigModule.Path) then 
             return false, "Config file does not exist" 
         end
         
         local success, loadData = pcall(function()
-            local readfile = readfile or function() 
-                warn("[ WindUI.ConfigManager ] The config system doesn't work in the studio.") 
-                return nil 
+            local contents = ReadFile(ConfigModule.Path)
+            if not contents then
+                return nil
             end
-            return HttpService:JSONDecode(readfile(ConfigModule.Path))
+            return HttpService:JSONDecode(contents)
         end)
         
         if not success then
@@ -245,19 +339,20 @@ function ConfigManager:CreateConfig(configFilename, autoload)
             loadData = migratedData
         end
         
-        if Window.PendingFlags then
-            for flag, element in next, Window.PendingFlags do
-                ConfigModule:Register(flag, element)
+        ConfigModule:RegisterAll()
+
+        -- Rework (bug 1): apply synchronously inside a suppressed-callback
+        -- block. Upstream used task.spawn for every value, so callbacks
+        -- fired *after* loading finished (and were effectively duplicated).
+        Creator.SuspendCallbacks(function()
+            for name, data in next, (loadData.__elements or {}) do
+                local element = ConfigModule.Elements[name]
+                local parser = ConfigManager.Parser[data.__type]
+                if element and parser then
+                    pcall(parser.Load, element, data)
+                end
             end
-        end
-        
-        for name, data in next, (loadData.__elements or {}) do
-            if ConfigModule.Elements[name] and ConfigManager.Parser[data.__type] then
-                task.spawn(function()
-                    ConfigManager.Parser[data.__type].Load(ConfigModule.Elements[name], data)
-                end)
-            end
-        end
+        end)
         
         ConfigModule.CustomData = loadData.__custom or {}
         
@@ -269,7 +364,7 @@ function ConfigManager:CreateConfig(configFilename, autoload)
             return false, "delfile function is not available"
         end
         
-        if not isfile(ConfigModule.Path) then
+        if not IsFile(ConfigModule.Path) then
             return false, "Config file does not exist"
         end
         
@@ -299,9 +394,9 @@ function ConfigManager:CreateConfig(configFilename, autoload)
     end
     
     
-    if isfile(ConfigModule.Path) then
+    if IsFile(ConfigModule.Path) then
         local success, configData = pcall(function()
-            return HttpService:JSONDecode(readfile(ConfigModule.Path))
+            return HttpService:JSONDecode(ReadFile(ConfigModule.Path))
         end)
         
         if success and configData and configData.__autoload then
@@ -335,7 +430,9 @@ function ConfigManager:GetAutoLoadConfigs()
     local autoloadConfigs = {}
     
     for configName, configModule in pairs(ConfigManager.Configs) do
-        if configModule.AutoLoad then
+        -- Rework: Init() prefetches existing files as plain JSON strings.
+        -- Indexing `.AutoLoad` on a string used to be a latent crash.
+        if typeof(configModule) == "table" and configModule.AutoLoad then
             table.insert(autoloadConfigs, configName)
         end
     end
@@ -350,7 +447,7 @@ function ConfigManager:DeleteConfig(configName)
     
     local configPath = ConfigManager.Path .. configName .. ".json"
     
-    if not isfile(configPath) then
+    if not IsFile(configPath) then
         return false, "Config file does not exist"
     end
     
@@ -375,8 +472,8 @@ function ConfigManager:AllConfigs()
     if not listfiles then return {} end
     
     local files = {}
-    if not isfolder(ConfigManager.Path) then
-        makefolder(ConfigManager.Path)
+    if not IsFolder(ConfigManager.Path) then
+        MakeFolder(ConfigManager.Path)
         return files
     end
     

@@ -6,12 +6,42 @@ local Tween = Creator.Tween
 
 local CreateButton = require("./ui/Button").New
 local CreateInput = require("./ui/Input").New
+local Localization = require("../modules/ReworkLocalization")
 
 function KeySystem.new(Config, Filename, func, keyValidator)
 	local KeyDialogInit = require("./window/Dialog")
 	local KeyDialog = KeyDialogInit.Create(true, "Popup", Config.Window, Config.WindUI, Config.WindUI.ScreenGui.KeySystem)
 
 	local Services = {}
+	local Connections = {}
+	local Finished = false
+
+	-- Rework (bug 2/8): every connection is tracked and released when the
+	-- dialog resolves; the callback can only fire once.
+	local function Connect(signal, fn)
+		local conn = Creator.AddSignal(signal, fn)
+		Connections[#Connections + 1] = conn
+		return conn
+	end
+
+	local function Finish(success)
+		if Finished then
+			return
+		end
+		Finished = true
+		for index = #Connections, 1, -1 do
+			local conn = Connections[index]
+			Connections[index] = nil
+			if conn then
+				pcall(function()
+					conn:Disconnect()
+				end)
+			end
+		end
+		if func then
+			Creator.SafeCallback(func, success == true)
+		end
+	end
 
 	local EnteredKey
 
@@ -48,7 +78,7 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 	local KeySystemTitle = New("TextLabel", {
 		AutomaticSize = "XY",
 		BackgroundTransparency = 1,
-		Text = "Key System",
+		Text = Localization.Key("keysystem.title"),
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, 0, 0.5, 0),
 		TextTransparency = 1, -- .4 -- hidden
@@ -86,7 +116,7 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 		KeySystemTitle,
 	})
 
-	local InputFrame = CreateInput("Enter Key", "key", nil, "Input", function(k)
+	local InputFrame = CreateInput(Localization.Get("keysystem.enter"), "key", nil, "Input", function(k)
 		EnteredKey = k
 	end)
 
@@ -190,8 +220,9 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 	--     CreateButton(values.Title, values.Icon, values.Callback, values.Variant)
 	-- end
 
-	local ExitButton = CreateButton("Exit", "log-out", function()
-		KeyDialog:Close()()
+	local ExitButton = CreateButton(Localization.Key("keysystem.exit"), "log-out", function()
+		KeyDialog:Close()
+		Finish(false)
 	end, "Tertiary", ButtonsContainer.Frame)
 
 	if ThumbnailFrame then
@@ -201,13 +232,25 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 		ExitButton.AnchorPoint = Vector2.new(0, 1)
 	end
 
+	-- Rework: "Get Key" is always present at the bottom of the dialog.
+	local HasGetKeyButton = false
+
 	if Config.KeySystem.URL then
-		CreateButton("Get key", "key", function()
-			setclipboard(Config.KeySystem.URL)
+		HasGetKeyButton = true
+		CreateButton(Localization.Key("keysystem.get"), "key", function()
+			if setclipboard then
+				pcall(setclipboard, Config.KeySystem.URL)
+			end
+			Config.WindUI:Notify({
+				Title = Localization.Get("keysystem.title"),
+				Content = Localization.Get("keysystem.copied"),
+				Icon = "key",
+			})
 		end, "Secondary", ButtonsContainer.Frame)
 	end
 
 	if Config.KeySystem.API then
+		HasGetKeyButton = true
 		-- local Icons = {
 		--     platoboost = "rbxassetid://75920162824531",
 		--     pandadevelopment = "panda",
@@ -218,7 +261,7 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 		-- }
 		local Width = 240
 		local Opened = false
-		local ButtonFrame = CreateButton("Get key", "key", nil, "Secondary", ButtonsContainer.Frame)
+		local ButtonFrame = CreateButton(Localization.Key("keysystem.get"), "key", nil, "Secondary", ButtonsContainer.Frame)
 
 		local Divider = Creator.NewRoundFrame(99, "Squircle", {
 			Size = UDim2.new(0, 1, 1, 0),
@@ -383,24 +426,24 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 					}),
 				}, true)
 
-				Creator.AddSignal(APIFrame.MouseEnter, function()
+				Connect(APIFrame.MouseEnter, function()
 					Tween(APIFrame, 0.08, { ImageTransparency = 0.95 }):Play()
 				end)
-				Creator.AddSignal(APIFrame.InputEnded, function()
+				Connect(APIFrame.InputEnded, function()
 					Tween(APIFrame, 0.08, { ImageTransparency = 1 }):Play()
 				end)
-				Creator.AddSignal(APIFrame.MouseButton1Click, function()
+				Connect(APIFrame.MouseButton1Click, function()
 					serviceInstance.Copy()
 					Config.WindUI:Notify({
 						Title = "Key System",
-						Content = "Key link copied to clipboard.",
+						Content = Localization.Get("keysystem.copied"),
 						Image = "key",
 					})
 				end)
 			end
 		end
 
-		Creator.AddSignal(ButtonFrame.MouseButton1Click, function()
+		Connect(ButtonFrame.MouseButton1Click, function()
 			if not Opened then
 				Tween(
 					DropdownContainer,
@@ -424,14 +467,26 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 		end)
 	end
 
-	local function handleSuccess(key)
-		KeyDialog:Close()()
-		writefile((Config.Folder or "Temp") .. "/" .. Filename .. ".key", tostring(key))
-		task.wait(0.4)
-		func(true)
+	if not HasGetKeyButton then
+		CreateButton(Localization.Key("keysystem.get"), "key", function()
+			Config.WindUI:Notify({
+				Title = Localization.Get("keysystem.title"),
+				Content = Localization.Get("keysystem.nolink"),
+				Icon = "key",
+			})
+		end, "Secondary", ButtonsContainer.Frame)
 	end
 
-	local SubmitButton = CreateButton("Submit", "arrow-right", function()
+	local function handleSuccess(key)
+		KeyDialog:Close()
+		if Config.KeySystem.SaveKey and writefile then
+			pcall(writefile, (Config.Folder or "Temp") .. "/" .. Filename .. ".key", tostring(key))
+		end
+		task.wait(0.4)
+		Finish(true)
+	end
+
+	local SubmitButton = CreateButton(Localization.Key("keysystem.check"), "arrow-right", function()
 		local key = tostring(EnteredKey or "empty")
 		local folder = Config.Folder or Config.Title
 
@@ -442,14 +497,14 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 				if Config.KeySystem.SaveKey then
 					handleSuccess(key)
 				else
-					KeyDialog:Close()()
+					KeyDialog:Close()
 					task.wait(0.4)
-					func(true)
+					Finish(true)
 				end
 			else
 				Config.WindUI:Notify({
 					Title = "Key System. Error",
-					Content = "Invalid key.",
+					Content = Localization.Get("keysystem.invalid"),
 					Icon = "triangle-alert",
 				})
 			end
@@ -461,10 +516,18 @@ function KeySystem.new(Config, Filename, func, keyValidator)
 				if Config.KeySystem.SaveKey then
 					handleSuccess(key)
 				else
-					KeyDialog:Close()()
+					KeyDialog:Close()
 					task.wait(0.4)
-					func(true)
+					Finish(true)
 				end
+			else
+				-- Rework: upstream silently ignored a wrong static key, so the
+				-- "Check Key" button looked broken. Tell the user instead.
+				Config.WindUI:Notify({
+					Title = "Key System. Error",
+					Content = Localization.Get("keysystem.invalid"),
+					Icon = "triangle-alert",
+				})
 			end
 		else
 			local isSuccess, result

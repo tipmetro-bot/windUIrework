@@ -1273,8 +1273,16 @@ return function(Config)
 		if Window.ProfilePanel then
 			return Window.ProfilePanel
 		end
-		Window.ProfilePanel = ProfilePanel.New(Window, ProfileConfig or {}, Config.WindUI)
-		return Window.ProfilePanel
+		local Panel = ProfilePanel.New(Window, ProfileConfig or {}, Config.WindUI)
+		Window.ProfilePanel = Panel
+		-- Rework: RU/EN + Dark/Light + loading toggles live in the panel.
+		-- Set `Settings = false` in CreateWindow to hide that section.
+		if Config.Settings ~= false and Panel.AddSettings then
+			pcall(function()
+				Panel:AddSettings()
+			end)
+		end
+		return Panel
 	end
 
 	function Window:SetTitle(text)
@@ -1439,6 +1447,19 @@ return function(Config)
 		if Window.Destroyed then
 			return
 		end
+		-- Rework: state must change IMMEDIATELY, not after `task.wait(0.06)`.
+		-- Otherwise clicking the open button twice (or tapping fast on a
+		-- phone) toggled the window twice and it ended up closed again.
+		Window.Closed = false
+		if Window.OpenButtonMain and Window.OpenButtonMain.SetOpenState then
+			Window.OpenButtonMain:SetOpenState(false)
+		end
+		-- Rework: hide/show the button IMMEDIATELY with the state, not only
+		-- inside the animation coroutine 0.06–0.4 s later. A closed window
+		-- must always have its open button on screen (PC and phone).
+		if Window.OpenButtonMain and Window.IsOpenButtonEnabled then
+			Window.OpenButtonMain:Refresh()
+		end
 		task.spawn(function()
 			if Window.OnOpenCallback then
 				task.spawn(function()
@@ -1447,7 +1468,6 @@ return function(Config)
 			end
 
 			task.wait(0.06)
-			Window.Closed = false
 
 			Window.UIElements.Main.Size = UDim2.new(Window.Size.X.Scale, Window.Size.X.Offset, 0, 100)
 			if Window.UIElements.ReworkScale then
@@ -1565,6 +1585,12 @@ return function(Config)
 
 		Window.CanDropdown = false
 		Window.Closed = true
+		if Window.OpenButtonMain and Window.OpenButtonMain.SetOpenState then
+			Window.OpenButtonMain:SetOpenState(true)
+		end
+		if Window.OpenButtonMain and Window.IsOpenButtonEnabled then
+			Window.OpenButtonMain:Refresh()
+		end
 
 		Animations:Play(Window.UIElements.Main, "Close", {
 			Size = UDim2.new(Window.Size.X.Scale, Window.Size.X.Offset, 0, 0),
@@ -1651,7 +1677,24 @@ return function(Config)
 
 				Window.Destroyed = true
 
+				if Window.OpenButtonMain and Window.OpenButtonMain.Destroy then
+					Window.OpenButtonMain:Destroy()
+				end
+
 				task.wait(0.4)
+
+				-- Rework (bug 8): release drag connections before the guis
+				-- disappear, then disconnect every remaining signal.
+				if WindowDragModule and WindowDragModule.Destroy then
+					pcall(function()
+						WindowDragModule:Destroy()
+					end)
+				end
+				if Config.WindUI and Config.WindUI.LoadingScreen then
+					pcall(function()
+						Config.WindUI.LoadingScreen:Destroy()
+					end)
+				end
 
 				Config.WindUI.ScreenGui:Destroy()
 				Config.WindUI.NotificationGui:Destroy()
@@ -1675,14 +1718,12 @@ return function(Config)
 		return Window:Close():Destroy()
 	end
 
-	local LastToggle = 0
 	function Window:Toggle()
-		-- Key repeat / double tap (Activated + MouseButton1Click) protection.
-		local now = os.clock()
-		if now - LastToggle < 0.18 then
-			return Window
-		end
-		LastToggle = now
+		-- Rework: no debounce here. The open button already debounces its
+		-- own Activated/MouseButton1Click/TouchTap signals, and a global
+		-- 0.18 s lock made back-to-back programmatic toggles (or a fast
+		-- double tap on a phone) silently do nothing. Key auto-repeat is
+		-- filtered in the InputBegan handler instead.
 		if Window.Closed then
 			Window:Open()
 		else
@@ -1799,12 +1840,19 @@ return function(Config)
 		end)
 	end
 
+	local LastKeyToggle = 0
 	Creator.AddSignal(UserInputService.InputBegan, function(input, isProcessed)
 		if isProcessed or Window.Destroyed then
 			return
 		end
 		-- Supports Enum.KeyCode, string names and a list of keys.
 		if MatchesKey(input, Window.ToggleKey) then
+			-- Only filter OS key auto-repeat, not real toggles.
+			local now = os.clock()
+			if now - LastKeyToggle < 0.12 then
+				return
+			end
+			LastKeyToggle = now
 			Window:Toggle()
 		end
 	end)
@@ -1822,11 +1870,12 @@ return function(Config)
 		Window:EditOpenButton(Window.OpenButton)
 	end
 
-	-- `Window.Profile = {...}` in CreateWindow builds the panel automatically.
-	if Window.ProfileConfig and typeof(Window.ProfileConfig) == "table" then
+	-- `Window.Profile = {...}` (or `Settings = {...}`) builds the panel.
+	local wantsSettings = Config.Settings ~= nil and Config.Settings ~= false
+	if (Window.ProfileConfig and typeof(Window.ProfileConfig) == "table") or wantsSettings then
 		task.defer(function()
 			if not Window.Destroyed and not Window.ProfilePanel then
-				Window:Profile(Window.ProfileConfig)
+				Window:Profile(Window.ProfileConfig or {})
 			end
 		end)
 	end

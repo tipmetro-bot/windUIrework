@@ -105,6 +105,24 @@ local garbage = SliderMath.Normalise({ Value = { Min = "abc", Max = nil, Default
 ok(SliderMath.Delta(0, garbage) >= 0, "garbage config produces a finite delta")
 ok(garbage.Max > garbage.Min, "garbage config still has a valid range")
 
+-- 8. Step rounding (bug 4 from the DeepSeek checklist)
+-- A fractional Min with an integer Step must not be rounded to an int.
+local half = SliderMath.Normalise({ Value = { Min = 0.5, Max = 5.5, Default = 0.5 }, Step = 1 })
+eq(half.IsFloat, true, "fractional Min is detected as float")
+near(SliderMath.Calculate(2.4, half), 2.5, "Step = 1 keeps the 0.5 offset")
+near(SliderMath.Calculate(0, half), 0.5, "value below Min clamps to Min")
+
+-- Small steps must not accumulate floating point noise.
+local milli = SliderMath.Normalise({ Value = { Min = 0, Max = 1, Default = 0 }, Step = 0.001 })
+eq(milli.IsFloat, true, "Step = 0.001 is float")
+near(SliderMath.Calculate(0.1234, milli), 0.123, "0.001 step snaps exactly")
+eq(SliderMath.Precision(0.001), 3, "precision of 0.001 is 3 decimals")
+eq(SliderMath.Precision(2), 0, "precision of 2 is 0 decimals")
+
+local tenth = SliderMath.Normalise({ Value = { Min = 0, Max = 1, Default = 0 }, Step = 0.1 })
+near(SliderMath.Calculate(0.25, tenth), 0.3, "0.1 step snaps to 0.3 without float noise")
+eq(SliderMath.Calculate(1.9, tenth), 1, "snapped value is clamped to Max")
+
 print(string.format("slider_math: %d checks, %d failures", checks, failures))
 if failures > 0 then
 	error("slider regression tests failed", 0)

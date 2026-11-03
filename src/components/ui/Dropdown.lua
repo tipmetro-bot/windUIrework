@@ -21,6 +21,23 @@ local TabBackgroundTransparency = 0.67
 function DropdownMenu.New(Config, Dropdown, Element, Type)
 	local DropdownModule = {}
 
+	-- Rework (bug 8): connections belong to this dropdown instance and are
+	-- all disconnected when the element is destroyed.
+	local ConnectionGroup = "dropdown_" .. tostring(Dropdown)
+	local function ConnectDropdown(signal, fn)
+		return Creator.AddScopedSignal(ConnectionGroup, signal, fn)
+	end
+
+	local RowGroup = ConnectionGroup .. "_rows"
+	local function ConnectDropdownRow(signal, fn)
+		return Creator.AddScopedSignal(RowGroup, signal, fn)
+	end
+
+	function DropdownModule:Destroy()
+		Creator.DisconnectGroup(RowGroup)
+		Creator.DisconnectGroup(ConnectionGroup)
+	end
+
 	if not Dropdown.Callback then
 		Type = "Menu"
 	end
@@ -81,6 +98,9 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 		Position = UDim2.new(-10, 0, -10, 0),
 		Visible = false,
 		Active = false,
+		-- Rework (bug 7): dropdowns live in their own ScreenGui; make the
+		-- z-order explicit so they can never slip under a window.
+		ZIndex = 9999,
 		--GroupTransparency = 1, -- 0
 		Parent = Config.WindUI.DropdownGui,
 		AnchorPoint = Vector2.new(1, 0),
@@ -255,11 +275,16 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 		end
 	end
 
-	function DropdownModule:Refresh(Values)
+	function DropdownModule:Refresh(Values, silent)
 		if Config.Window.Destroyed then
 			return
 		end
+		if type(Values) ~= "table" then
+			Values = Dropdown.Values or {}
+		end
 
+		-- Rework (bug 8): row connections must die with the old rows.
+		Creator.DisconnectGroup(RowGroup)
 		for _, Elementt in next, Dropdown.UIElements.Menu.Frame.ScrollingFrame:GetChildren() do
 			if not Elementt:IsA("UIListLayout") then
 				Elementt:Destroy()
@@ -464,7 +489,7 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 				DropdownModule:Display()
 
 				if Type == "Dropdown" then
-					Creator.AddSignal(TabMain.UIElements.TabItem.MouseButton1Click, function()
+					ConnectDropdownRow(TabMain.UIElements.TabItem.MouseButton1Click, function()
 						if Dropdown.Locked or TabMain.Locked then
 							return
 						end
@@ -529,14 +554,14 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 					end)
 				elseif Type == "Menu" then
 					if not TabMain.Locked then
-						Creator.AddSignal(TabMain.UIElements.TabItem.MouseEnter, function()
+						ConnectDropdownRow(TabMain.UIElements.TabItem.MouseEnter, function()
 							Tween(TabMain.UIElements.TabItem, 0.08, { ImageTransparency = TabBackgroundTransparency }):Play()
 						end)
-						Creator.AddSignal(TabMain.UIElements.TabItem.InputEnded, function()
+						ConnectDropdownRow(TabMain.UIElements.TabItem.InputEnded, function()
 							Tween(TabMain.UIElements.TabItem, 0.08, { ImageTransparency = 1 }):Play()
 						end)
 					end
-					Creator.AddSignal(TabMain.UIElements.TabItem.MouseButton1Click, function()
+					ConnectDropdownRow(TabMain.UIElements.TabItem.MouseButton1Click, function()
 						if Dropdown.Locked or TabMain.Locked then
 							return
 						end
@@ -566,14 +591,25 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 			Dropdown.UIElements.MenuCanvas.Size.Y.Scale,
 			Dropdown.UIElements.MenuCanvas.Size.Y.Offset
 		)
-		Callback()
+		-- Rework (bug 1): applying a saved config value must not re-fire
+		-- the user's Callback. `Callback()` is what triggers it.
+		if not silent then
+			Callback()
+		end
 
 		Dropdown.Values = Values
 	end
 
-	DropdownModule:Refresh(Dropdown.Values)
+	DropdownModule:Refresh(Dropdown.Values, true)
 
-	function DropdownModule:Select(Items)
+	-- Rework (bug 3): `Options` / `Values` can now be replaced at runtime.
+	function DropdownModule:SetValues(Values, keepSelection)
+		DropdownModule:Refresh(Values, keepSelection ~= false)
+		DropdownModule:Display()
+		return DropdownModule
+	end
+
+	function DropdownModule:Select(Items, silent)
 		if Items then
 			Dropdown.Value = Items
 		else
@@ -583,7 +619,9 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 				Dropdown.Value = nil
 			end
 		end
-		DropdownModule:Refresh(Dropdown.Values)
+		DropdownModule:Refresh(Dropdown.Values, silent)
+		DropdownModule:Display()
+		return DropdownModule
 	end
 
 	RecalculateListSize()
@@ -632,7 +670,7 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 		end)
 	end
 
-	Creator.AddSignal(
+	ConnectDropdown(
 		(
 			Dropdown.UIElements.Dropdown and Dropdown.UIElements.Dropdown.MouseButton1Click
 			or Dropdown.DropdownFrame.UIElements.Main.MouseButton1Click
@@ -642,11 +680,33 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 		end
 	)
 
-	Creator.AddSignal(UserInputService.InputBegan, function(Input)
+	-- Rework (bug 3/6): Player:GetMouse().X/Y is viewport space (it ignores
+	-- GuiInset), while AbsolutePosition with IgnoreGuiInset = true is full
+	-- screen space. On phones that offset made outside-click detection
+	-- fail. Input.Position is in the very same space as AbsolutePosition.
+	local function PointerPosition(Input)
+		if Input and Input.Position and (Input.Position.X ~= 0 or Input.Position.Y ~= 0) then
+			return Input.Position.X, Input.Position.Y
+		end
+		local ok, location = pcall(function()
+			return UserInputService:GetMouseLocation()
+		end)
+		if ok and location then
+			return location.X, location.Y
+		end
+		return Mouse.X, Mouse.Y
+	end
+
+	ConnectDropdown(UserInputService.InputBegan, function(Input)
 		if
 			Input.UserInputType == Enum.UserInputType.MouseButton1
 			or Input.UserInputType == Enum.UserInputType.Touch
 		then
+			if not Config.Window.CanDropdown or not Dropdown.Opened then
+				return
+			end
+
+			local x, y = PointerPosition(Input)
 			local menuCanvas = Dropdown.UIElements.MenuCanvas
 			local AbsPos, AbsSize = menuCanvas.AbsolutePosition, menuCanvas.AbsoluteSize
 
@@ -654,23 +714,23 @@ function DropdownMenu.New(Config, Dropdown, Element, Type)
 			local ButtonAbsPos = DropdownButton.AbsolutePosition
 			local ButtonAbsSize = DropdownButton.AbsoluteSize
 
-			local isClickOnDropdown = Mouse.X >= ButtonAbsPos.X
-				and Mouse.X <= ButtonAbsPos.X + ButtonAbsSize.X
-				and Mouse.Y >= ButtonAbsPos.Y
-				and Mouse.Y <= ButtonAbsPos.Y + ButtonAbsSize.Y
+			local isClickOnDropdown = x >= ButtonAbsPos.X
+				and x <= ButtonAbsPos.X + ButtonAbsSize.X
+				and y >= ButtonAbsPos.Y
+				and y <= ButtonAbsPos.Y + ButtonAbsSize.Y
 
-			local isClickOnMenu = Mouse.X >= AbsPos.X
-				and Mouse.X <= AbsPos.X + AbsSize.X
-				and Mouse.Y >= AbsPos.Y
-				and Mouse.Y <= AbsPos.Y + AbsSize.Y
+			local isClickOnMenu = x >= AbsPos.X
+				and x <= AbsPos.X + AbsSize.X
+				and y >= AbsPos.Y
+				and y <= AbsPos.Y + AbsSize.Y
 
-			if Config.Window.CanDropdown and Dropdown.Opened and not isClickOnDropdown and not isClickOnMenu then
+			if not isClickOnDropdown and not isClickOnMenu then
 				DropdownModule:Close()
 			end
 		end
 	end)
 
-	Creator.AddSignal(
+	ConnectDropdown(
 		Dropdown.UIElements.Dropdown and Dropdown.UIElements.Dropdown:GetPropertyChangedSignal("AbsolutePosition")
 			or Dropdown.DropdownFrame.UIElements.Main:GetPropertyChangedSignal("AbsolutePosition"),
 		UpdatePosition

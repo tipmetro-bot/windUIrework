@@ -104,6 +104,7 @@ function Element:New(Config)
 		Slider.IsTextbox = Slider.IsTextbox ~= false
 	end
 
+	local SliderGroup = "slider_" .. tostring(Slider)
 	local Holding = false
 	local HasAppliedOnce = false
 	local CanCallback = true
@@ -282,14 +283,16 @@ function Element:New(Config)
 		Slider.Value.Default = FormatValue(newValue)
 	end
 
-	local function ApplyValue(newValue, time, force)
+	local function ApplyValue(newValue, time, force, silent)
 		local changed = (newValue ~= LastValue)
 		if force or changed or not HasAppliedOnce then
 			HasAppliedOnce = true
 			Value = newValue
 			LastValue = newValue
 			UpdateVisual(newValue, time)
-			Creator.SafeCallback(Slider.Callback, FormatValue(newValue))
+			if not silent then
+				Creator.SafeCallback(Slider.Callback, FormatValue(newValue))
+			end
 		end
 	end
 
@@ -358,7 +361,7 @@ function Element:New(Config)
 	------------------------------------------------------------------
 	-- 5. Public API
 	------------------------------------------------------------------
-	function Slider:Set(newValue, input, force)
+	function Slider:Set(newValue, input, force, silent)
 		if not CanCallback and not force then
 			return Slider
 		end
@@ -421,8 +424,9 @@ function Element:New(Config)
 			local value = CalculateValue(ToNumber(newValue, LastValue))
 			-- Programmatic :Set() is always an explicit action: fire the
 			-- callback even when the value is unchanged (this is the `Set(0)`
-			-- case that upstream silently swallowed).
-			ApplyValue(value, "Fast", true)
+			-- case that upstream silently swallowed). `silent` is used by
+			-- ConfigManager when applying saved values.
+			ApplyValue(value, "Fast", true, silent == true)
 		end
 		return Slider
 	end
@@ -475,20 +479,44 @@ function Element:New(Config)
 		return Slider
 	end
 
+	-- Rework (bug 4): `Locked` alone is not enough. A transparent Frame
+	-- with Active = true still receives InputBegan, so a locked slider
+	-- could still be dragged. Toggle Active on every hit surface.
+	local function SetActive(active)
+		pcall(function()
+			Slider.UIElements.SliderContainer.Active = active
+		end)
+		pcall(function()
+			Slider.SliderFrame.UIElements.Main.Active = active
+		end)
+		pcall(function()
+			Slider.UIElements.SliderIcon.Active = active
+		end)
+		if Slider.UIElements.SliderContainer.TextBox then
+			pcall(function()
+				Slider.UIElements.SliderContainer.TextBox.TextEditable = active
+			end)
+		end
+	end
+
 	function Slider:Lock()
 		Slider.Locked = true
 		CanCallback = false
+		Release()
+		SetActive(false)
 		return Slider.SliderFrame:Lock(Slider.LockedTitle)
 	end
 
 	function Slider:Unlock()
 		Slider.Locked = false
 		CanCallback = true
+		SetActive(true)
 		return Slider.SliderFrame:Unlock()
 	end
 
 	function Slider:Destroy()
 		Release()
+		Creator.DisconnectGroup("slider_" .. tostring(Slider))
 		if Slider.SliderFrame and Slider.SliderFrame.Destroy then
 			pcall(function()
 				Slider.SliderFrame:Destroy()
@@ -498,15 +526,17 @@ function Element:New(Config)
 
 	if Slider.Locked then
 		Slider:Lock()
+	else
+		SetActive(true)
 	end
 
 	------------------------------------------------------------------
 	-- 6. Input
 	------------------------------------------------------------------
-	Creator.AddSignal(TextBox.Focused, function()
+	Creator.AddScopedSignal(SliderGroup, TextBox.Focused, function()
 		Slider.IsFocusing = true
 	end)
-	Creator.AddSignal(TextBox.FocusLost, function()
+	Creator.AddScopedSignal(SliderGroup, TextBox.FocusLost, function()
 		Slider.IsFocusing = false
 		local newValue = ToNumber(TextBox.Text, nil)
 		if newValue ~= nil then
@@ -521,12 +551,12 @@ function Element:New(Config)
 		end
 	end)
 
-	Creator.AddSignal(Slider.UIElements.SliderContainer.MouseEnter, function()
+	Creator.AddScopedSignal(SliderGroup, Slider.UIElements.SliderContainer.MouseEnter, function()
 		if not Holding then
 			SetThumbSize(BigThumbSize, 0)
 		end
 	end)
-	Creator.AddSignal(Slider.UIElements.SliderContainer.MouseLeave, function()
+	Creator.AddScopedSignal(SliderGroup, Slider.UIElements.SliderContainer.MouseLeave, function()
 		if not Holding then
 			SetThumbSize(BaseThumbSize, 0)
 		end
@@ -535,7 +565,7 @@ function Element:New(Config)
 	local CurInput = Config.WindUI and Config.WindUI.GenerateGUID
 		and Config.WindUI.GenerateGUID() or tostring(Slider)
 
-	Creator.AddSignal(Slider.UIElements.SliderContainer.InputBegan, function(input)
+	Creator.AddScopedSignal(SliderGroup, Slider.UIElements.SliderContainer.InputBegan, function(input)
 		if Slider.Locked or Holding or IsSliderHolding then
 			return
 		end

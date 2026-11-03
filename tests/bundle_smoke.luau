@@ -437,6 +437,19 @@ if not iconsAdded or WindUI.Creator.Icon("smokepack:smoke") == nil then
 	error("AddIcons on a vendored/flat pack failed", 0)
 end
 
+-- Key System strings must exist in both dictionaries (RU/EN).
+WindUI:SetLanguage("en")
+if WindUI.ReworkLocalization.Get("keysystem.invalid") ~= "Invalid key." then
+	error("EN dictionary has no invalid-key message", 0)
+end
+if WindUI.ReworkLocalization.Get("keysystem.nolink") ~= "No key link configured (KeySystem.URL / KeySystem.API)." then
+	error("EN dictionary has no no-link message", 0)
+end
+WindUI:SetLanguage("ru")
+if WindUI.ReworkLocalization.Get("keysystem.nolink") ~= "Ссылка на ключ не задана (KeySystem.URL / KeySystem.API)." then
+	error("RU dictionary has no no-link message", 0)
+end
+
 ----------------------------------------------------------------------
 -- UI smoke: window + zero slider + profile panel, all under the mock.
 -- Animations are disabled so task.delay/task.spawn helpers stay finite.
@@ -451,6 +464,9 @@ local created, Window = pcall(function()
 		ToggleKey = "RightShift",
 		User = { Enabled = true },
 		OpenButton = { Enabled = true, Draggable = true },
+		Loading = { Enabled = true, Duration = 0.25 },
+		Settings = { Language = "ru" },
+		Theme = "Dark",
 		Profile = {
 			Config = "default",
 			Sections = {
@@ -527,23 +543,183 @@ Panel:Open()
 Panel:Close()
 Panel:GetSection("Визуалы"):Toggle()
 
--- Open/close button on PC: Toggle() must show the button after closing.
-Window:Toggle() -- close
-if not Window.OpenButtonMain:ShouldShow() then
-	error("open button is hidden after closing on PC", 0)
-end
-Window:Toggle() -- open
+-- Open/close button on PC: present while the menu is hidden, gone when the
+-- menu is open. Also checks that two fast toggles really toggle twice.
 if Window.OpenButtonMain.StayVisible then
 	error("StayVisible should be false by default", 0)
+end
+Window:Toggle() -- close
+if Window.Closed ~= true then
+	error("Toggle() did not close the window", 0)
+end
+if not Window.OpenButtonMain:ShouldShow() or Window.OpenButtonMain.Container.Visible ~= true then
+	error("open button is missing after closing the menu on PC", 0)
+end
+if string.sub(tostring(Window.OpenButtonMain.Title.Text), 1, 4) == "loc:" then
+	error("open button shows a raw loc: key instead of a translated label", 0)
+end
+Window:Toggle() -- open
+if Window.Closed ~= false then
+	error("Toggle() did not reopen the window (debounce swallowed it)", 0)
+end
+if Window.OpenButtonMain:ShouldShow() or Window.OpenButtonMain.Container.Visible ~= false then
+	error("open button must hide while the menu is open", 0)
 end
 Window:EditOpenButton({ StayVisible = true, OnlyMobile = false })
 if not Window.OpenButtonMain.StayVisible then
 	error("EditOpenButton({ StayVisible = true }) did not apply", 0)
 end
+if not Window.OpenButtonMain:ShouldShow() then
+	error("StayVisible should keep the button on screen while open", 0)
+end
 Window:SetToggleKey("F5")
 Window:SetOpenButtonEnabled(true)
 
+----------------------------------------------------------------------
+-- New rework features: settings panel, RU/EN, themes, loading, guards
+----------------------------------------------------------------------
+-- Bug 2: CreateWindow must never build a second window.
+local Again = WindUI:CreateWindow({ Title = "Second" })
+if Again ~= Window then
+	error("CreateWindow created a second window", 0)
+end
+
+if WindUI.LoadingScreen == nil or WindUI.LoadingScreen.Enabled ~= true then
+	error("Loading = { Enabled = true } did not create a loading screen", 0)
+end
+if WindUI.DisplayOrders.Loading <= WindUI.DisplayOrders.Dropdown then
+	error("DisplayOrder layering is wrong", 0)
+end
+if WindUI.ScreenGui.DisplayOrder ~= WindUI.DisplayOrders.Window then
+	error("Window ScreenGui DisplayOrder was not applied", 0)
+end
+WindUI:SetDisplayOrder("Window", 12)
+if WindUI.ScreenGui.DisplayOrder ~= 12 then
+	error("SetDisplayOrder did not apply", 0)
+end
+
+-- Settings section in the profile panel
+local SettingsSection = Panel:GetSection("Настройки")
+if not SettingsSection then
+	error("profile panel has no settings section", 0)
+end
+if not Panel:GetItem("ReworkLanguage") or not Panel:GetItem("ReworkTheme") then
+	error("RU/EN language or Dark/Light theme row is missing", 0)
+end
+if not Panel:GetItem("ReworkLoading") or not Panel:GetItem("ReworkAutoLoad") then
+	error("loading / autoload toggle is missing", 0)
+end
+
+-- Switching language from the UI (not from code)
+Panel:SetValue("ReworkLanguage", "en")
+if WindUI:GetLanguage() ~= "en" then
+	error("language row did not switch the library to EN", 0)
+end
+if Panel:GetValue("ReworkLanguage") ~= "en" then
+	error("language row value was not stored", 0)
+end
+WindUI:SetLanguage("ru")
+if WindUI:GetLanguage() ~= "ru" then
+	error("WindUI:SetLanguage('ru') failed", 0)
+end
+if Panel:GetValue("ReworkLanguage") ~= "ru" then
+	error("language row did not follow a code-side language switch", 0)
+end
+-- "eng" / "english" / "rus" aliases are accepted too.
+WindUI:SetLanguage("eng")
+if WindUI:GetLanguage() ~= "en" or Panel:GetValue("ReworkLanguage") ~= "en" then
+	error("the 'eng' alias did not switch the language or sync the row", 0)
+end
+WindUI:SetLanguage("ru")
+-- Section lookups must survive a language change.
+if not Panel:GetSection("Комбат") or not Panel:GetSection("Combat") then
+	error("GetSection() is not language-independent", 0)
+end
+
+-- Switching theme from the UI: every WindUI theme must be available.
+local ThemeRow = Panel:GetItem("ReworkTheme")
+if #ThemeRow.Options < 10 then
+	error("the panel only offers 2 themes instead of the WindUI theme list", 0)
+end
+Panel:SetValue("ReworkTheme", "Light")
+if WindUI:GetCurrentTheme() ~= "Light" then
+	error("theme row did not switch to Light", 0)
+end
+WindUI:SetTheme("Dark")
+if WindUI:GetCurrentTheme() ~= "Dark" then
+	error("WindUI:SetTheme('Dark') failed", 0)
+end
+if Panel:GetValue("ReworkTheme") ~= "Dark" then
+	error("theme row did not follow a code-side theme switch", 0)
+end
+
+-- A 3+ option row opens a real list instead of cycling 16 times.
+ThemeRow.UIElements.Row.Activated:Fire()
+local ChoicePopup = Panel.UIElements.ChoicePopup
+if not ChoicePopup or not ChoicePopup.Visible then
+	error("clicking the theme row did not open the theme list", 0)
+end
+local optionButtons = {}
+for _, child in ipairs(Panel.UIElements.ChoiceList:GetChildren()) do
+	if child.Name ~= "Layout" then
+		optionButtons[#optionButtons + 1] = child
+	end
+end
+if #optionButtons < 10 then
+	error("theme list popup is empty", 0)
+end
+for _, button in ipairs(optionButtons) do
+	if tostring(button.Text) == "Rose" then
+		button.Activated:Fire()
+		break
+	end
+end
+if WindUI:GetCurrentTheme() ~= "Rose" or ChoicePopup.Visible then
+	error("picking a theme from the popup did not apply it / close the list", 0)
+end
+WindUI:SetTheme("Dark")
+
+-- Loading can be disabled both from the UI and from code
+Panel:SetValue("ReworkLoading", false)
+if WindUI.LoadingScreen.Enabled ~= false then
+	error("loading toggle did not disable the overlay", 0)
+end
+WindUI:SetLoadingEnabled(false)
+
+-- Bug 4: locked slider must not keep an Active hit surface.
+local LockedSlider = Tab:Slider({
+	Title = "Locked",
+	Value = { Min = 0, Max = 10, Default = 0 },
+	Locked = true,
+})
+if LockedSlider.UIElements.SliderContainer.Active ~= false then
+	error("locked slider still has Active = true", 0)
+end
+LockedSlider:Unlock()
+if LockedSlider.UIElements.SliderContainer.Active ~= true then
+	error("unlocked slider did not restore Active", 0)
+end
+
+-- Bug 3: options can be replaced at runtime.
+local Dropdown = Tab:Dropdown({
+	Title = "Options",
+	Values = { "One", "Two" },
+	Value = "One",
+	Callback = function() end,
+})
+Dropdown:SetValues({ "Alpha", "Beta", "Gamma" })
+if #Dropdown.Values ~= 3 then
+	error("Dropdown:SetValues did not update Values", 0)
+end
+
+-- Bug 8: DisconnectAll must actually clear the connection list.
+local before = #WindUI.Creator.Signals
+WindUI.Creator.DisconnectAll()
+if #WindUI.Creator.Signals ~= 0 then
+	error("DisconnectAll leaked connections", 0)
+end
+
 print(string.format(
-	"bundle_smoke: OK (WindUI v%s | window, zero sliders, profile panel, PC open button)",
+	"bundle_smoke: OK (WindUI v%s | window, zero sliders, profile panel, PC open button, settings RU/EN + themes + loading, guards)",
 	tostring(WindUI.Version)
 ))

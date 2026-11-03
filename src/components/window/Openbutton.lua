@@ -25,6 +25,7 @@
 
 local Creator = require("../../modules/Creator")
 local Animations = require("../../modules/Animations")
+local Localization = require("../../modules/ReworkLocalization")
 local New = Creator.New
 
 local cloneref = (cloneref or clonereference or function(instance)
@@ -42,6 +43,10 @@ function OpenButton.New(Window)
 		StayVisible = false,
 		Draggable = true,
 		VisibleState = false,
+		WindowClosed = false,
+		DefaultTitle = Window.Title or "WindUI",
+		CustomTitle = nil,
+		Destroyed = false,
 	}
 
 	local Icon
@@ -328,8 +333,54 @@ function OpenButton.New(Window)
 		)
 	end
 
+	-- Rework: the button has an explicit open/closed state. Writing a raw
+	-- `loc:rework.open` string into Title.Text used to display the key
+	-- itself on the button, and switching language never updated it.
+	-- Register the key through Creator so it resolves AND stays in sync.
+	function OpenButtonMain:RefreshTitle()
+		if self.Destroyed or not Title then
+			return self
+		end
+		local key
+		if self.StayVisible and self.WindowClosed and self.CustomTitle then
+			-- A real toggle, but respect a user-supplied label for "open".
+			Title.Text = self.CustomTitle
+			pcall(function()
+				Creator:ChangeTranslationKey(Title, self.CustomTitle)
+			end)
+			return self
+		elseif self.StayVisible then
+			key = self.WindowClosed and "open" or "close"
+		elseif self.CustomTitle then
+			Title.Text = self.CustomTitle
+			pcall(function()
+				Creator:ChangeTranslationKey(Title, self.CustomTitle)
+			end)
+			return self
+		else
+			key = "open"
+		end
+		Title.Text = Localization.Get(key)
+		pcall(function()
+			Creator:ChangeTranslationKey(Title, Localization.Key(key))
+		end)
+		return self
+	end
+
+	function OpenButtonMain:SetOpenState(windowClosed)
+		local closed = windowClosed == true
+		self.WindowClosed = closed
+		-- Always refresh: StayVisible / language may have changed even when
+		-- the window state did not.
+		return self:RefreshTitle()
+	end
+
+	function OpenButtonMain:IsWindowOpen()
+		return not self.WindowClosed
+	end
+
 	function OpenButtonMain:ShouldShow()
-		if not self.Enabled or Window.Destroyed then
+		if self.Destroyed or not self.Enabled or Window.Destroyed then
 			return false
 		end
 		if self.OnlyMobile and Window.IsMobile == false then
@@ -342,6 +393,9 @@ function OpenButton.New(Window)
 	end
 
 	function OpenButtonMain:Visible(value)
+		if self.Destroyed then
+			return self
+		end
 		if value == nil then
 			value = self:ShouldShow()
 		end
@@ -349,6 +403,12 @@ function OpenButton.New(Window)
 		local token = VisibilityToken
 
 		if value == true then
+			-- Rework: never replay the "appear" animation when the button is
+			-- already on screen (Window:Open() used to call Visible(true)
+			-- every time, making the button flash/teleport).
+			if self.VisibleState and Container.Visible then
+				return self
+			end
 			self.VisibleState = true
 			Container.Size = UDim2.new(
 				0, math.max(Button.AbsoluteSize.X, 120),
@@ -369,6 +429,9 @@ function OpenButton.New(Window)
 				PulseHandle = Animations:Pulse(Button.UIStroke, "Transparency", 0.1, 0.45, 2.2)
 			end
 		else
+			if not self.VisibleState and not Container.Visible then
+				return self
+			end
 			self.VisibleState = false
 			if PulseHandle then
 				PulseHandle:Stop()
@@ -413,10 +476,12 @@ function OpenButton.New(Window)
 
 	function OpenButtonMain:SetTitle(text)
 		if Title and text then
-			Title.Text = tostring(text)
+			self.CustomTitle = tostring(text)
+			Title.Text = self.CustomTitle
 			pcall(function()
-				Creator:ChangeTranslationKey(Title, tostring(text))
+				Creator:ChangeTranslationKey(Title, self.CustomTitle)
 			end)
+			self:RefreshTitle()
 		end
 		return self
 	end
@@ -467,6 +532,10 @@ function OpenButton.New(Window)
 			self.OnlyMobile = false
 		end
 		self.StayVisible = Module.StayVisible == true
+		-- Refresh the label for the new StayVisible value.
+		local wasClosed = self.WindowClosed
+		self.WindowClosed = nil
+		self:SetOpenState(wasClosed)
 
 		if Module.Draggable ~= nil then
 			self.Draggable = Module.Draggable == true
@@ -536,7 +605,36 @@ function OpenButton.New(Window)
 		end)
 	end)
 
+	-- Keep the label in sync when the language is switched from the panel.
+	OpenButtonMain.LanguageUnsubscribe = Localization.OnChange(function()
+		if not OpenButtonMain.Destroyed then
+			OpenButtonMain:RefreshTitle()
+		end
+	end)
+
+	function OpenButtonMain:Destroy()
+		if self.Destroyed then
+			return
+		end
+		self.Destroyed = true
+		if self.LanguageUnsubscribe then
+			pcall(self.LanguageUnsubscribe)
+			self.LanguageUnsubscribe = nil
+		end
+		if DragModule and DragModule.Destroy then
+			pcall(function()
+				DragModule:Destroy()
+			end)
+		end
+		if Container and Container.Destroy then
+			pcall(function()
+				Container:Destroy()
+			end)
+		end
+	end
+
 	OpenButtonMain:SetScale(1)
+	OpenButtonMain:RefreshTitle()
 	return OpenButtonMain
 end
 
