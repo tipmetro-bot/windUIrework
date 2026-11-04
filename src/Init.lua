@@ -240,7 +240,7 @@ function WindUI:OnThemeChange(func)
 		return function() end
 	end
 	-- Rework: keep every subscriber. Upstream stored ONE callback, so the
-	-- profile panel's theme row silently disabled the user's own handler.
+	-- a single handler silently dropped every other subscriber.
 	WindUI.ThemeChangeSubscribers = WindUI.ThemeChangeSubscribers or {}
 	WindUI.ThemeChangeSubscribers[#WindUI.ThemeChangeSubscribers + 1] = func
 	return function()
@@ -393,8 +393,8 @@ Creator.Themes = WindUI.Themes
 
 WindUI:SetTheme("Dark")
 
--- Rework: RU/EN is built in and can be switched from the profile panel
--- (or from code with `WindUI:SetLanguage("en")`).
+-- Rework: RU/EN is built in and switched FROM CODE with
+-- WindUI:SetLanguage("ru" | "eng"). Default is ENG.
 WindUI.ReworkLocalization.Install(WindUI, nil)
 WindUI:SetLanguage(WindUI.ReworkLocalization.GetLanguage())
 
@@ -471,16 +471,14 @@ function WindUI:CreateWindow(Config)
 		Creator.SetTheme(WindUI.Theme or WindUI.Themes.Dark)
 	end
 
-	-- Rework: language + loading are configurable from code.
-	local Settings = type(Config.Settings) == "table" and Config.Settings or {}
-	local requestedLanguage = Config.Language or Settings.Language
-	if requestedLanguage then
-		WindUI:SetLanguage(requestedLanguage)
+	-- Rework: language + loading are configurable from CODE only.
+	-- Default language is ENG; RU is `Language = "ru"` / SetLanguage("ru").
+	-- Themes are chosen like in the original WindUI: `Theme = "Rose"`
+	-- in CreateWindow or `WindUI:SetTheme("Rose")`.
+	if Config.Language then
+		WindUI:SetLanguage(Config.Language)
 	end
 	local loadingConfig = Config.Loading
-	if loadingConfig == nil then
-		loadingConfig = Settings.Loading
-	end
 	WindUI.LoadingScreen = LoadingScreen.New(WindUI, loadingConfig)
 	WindUI.LoadingEnabled = WindUI.LoadingScreen.Enabled
 
@@ -614,7 +612,6 @@ function WindUI:CreateWindow(Config)
 	end
 
 	Window.LoadingScreen = WindUI.LoadingScreen
-	Window.Settings = Settings
 	WindUI.Transparent = Config.Transparent
 	WindUI.Window = Window
 

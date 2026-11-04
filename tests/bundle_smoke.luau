@@ -437,6 +437,11 @@ if not iconsAdded or WindUI.Creator.Icon("smokepack:smoke") == nil then
 	error("AddIcons on a vendored/flat pack failed", 0)
 end
 
+-- The language system is RU/ENG with ENG as the default.
+if WindUI:GetLanguage() ~= "en" then
+	error("default language must be ENG", 0)
+end
+
 -- Key System strings must exist in both dictionaries (RU/EN).
 WindUI:SetLanguage("en")
 if WindUI.ReworkLocalization.Get("keysystem.invalid") ~= "Invalid key." then
@@ -449,6 +454,7 @@ WindUI:SetLanguage("ru")
 if WindUI.ReworkLocalization.Get("keysystem.nolink") ~= "Ссылка на ключ не задана (KeySystem.URL / KeySystem.API)." then
 	error("RU dictionary has no no-link message", 0)
 end
+WindUI:SetLanguage("en") -- back to the default before building UI
 
 ----------------------------------------------------------------------
 -- UI smoke: window + zero slider + profile panel, all under the mock.
@@ -465,7 +471,6 @@ local created, Window = pcall(function()
 		User = { Enabled = true },
 		OpenButton = { Enabled = true, Draggable = true },
 		Loading = { Enabled = true, Duration = 0.25 },
-		Settings = { Language = "ru" },
 		Theme = "Dark",
 		Profile = {
 			Config = "default",
@@ -565,12 +570,15 @@ end
 if Window.OpenButtonMain:ShouldShow() or Window.OpenButtonMain.Container.Visible ~= false then
 	error("open button must hide while the menu is open", 0)
 end
+-- Even an explicit StayVisible / Visible(true) must NOT put the button
+-- over an open menu.
 Window:EditOpenButton({ StayVisible = true, OnlyMobile = false })
-if not Window.OpenButtonMain.StayVisible then
-	error("EditOpenButton({ StayVisible = true }) did not apply", 0)
+if Window.OpenButtonMain.StayVisible then
+	error("StayVisible must be ignored (button over an open menu)", 0)
 end
-if not Window.OpenButtonMain:ShouldShow() then
-	error("StayVisible should keep the button on screen while open", 0)
+Window.OpenButtonMain:Visible(true)
+if Window.OpenButtonMain:ShouldShow() or Window.OpenButtonMain.Container.Visible ~= false then
+	error("explicit Visible(true) put the button over an open menu", 0)
 end
 Window:SetToggleKey("F5")
 Window:SetOpenButtonEnabled(true)
@@ -598,93 +606,70 @@ if WindUI.ScreenGui.DisplayOrder ~= 12 then
 	error("SetDisplayOrder did not apply", 0)
 end
 
--- Settings section in the profile panel
-local SettingsSection = Panel:GetSection("Настройки")
-if not SettingsSection then
-	error("profile panel has no settings section", 0)
+-- Account panel: ONLY the Combat / Visuals lists, no settings section.
+if Panel:GetSection("Настройки") or Panel:GetSection("Settings") then
+	error("account panel still has a settings section", 0)
 end
-if not Panel:GetItem("ReworkLanguage") or not Panel:GetItem("ReworkTheme") then
-	error("RU/EN language or Dark/Light theme row is missing", 0)
+if Panel:GetItem("ReworkLanguage") or Panel:GetItem("ReworkTheme")
+	or Panel:GetItem("ReworkLoading") or Panel:GetItem("ReworkAutoLoad") then
+	error("account panel still has built-in settings rows", 0)
 end
-if not Panel:GetItem("ReworkLoading") or not Panel:GetItem("ReworkAutoLoad") then
-	error("loading / autoload toggle is missing", 0)
+if #Panel.Sections ~= 2 then
+	error("account panel must contain exactly Combat + Visuals", 0)
+end
+if not Panel:GetSection("Комбат") or not Panel:GetSection("Combat")
+	or not Panel:GetSection("Визуалы") or not Panel:GetSection("Visuals") then
+	error("Combat / Visuals sections are missing or not language-independent", 0)
 end
 
--- Switching language from the UI (not from code)
-Panel:SetValue("ReworkLanguage", "en")
-if WindUI:GetLanguage() ~= "en" then
-	error("language row did not switch the library to EN", 0)
-end
-if Panel:GetValue("ReworkLanguage") ~= "en" then
-	error("language row value was not stored", 0)
+-- Language is chosen from CODE (RU/ENG, default ENG); panel labels follow.
+if WindUI:GetLanguage() ~= "eng" and WindUI:GetLanguage() ~= "en" then
+	error("window did not start with the default ENG language", 0)
 end
 WindUI:SetLanguage("ru")
 if WindUI:GetLanguage() ~= "ru" then
 	error("WindUI:SetLanguage('ru') failed", 0)
 end
-if Panel:GetValue("ReworkLanguage") ~= "ru" then
-	error("language row did not follow a code-side language switch", 0)
+if tostring(Panel.Sections[1].UIElements.TitleLabel.Text) ~= "Комбат" then
+	error("panel header did not switch to RU", 0)
 end
--- "eng" / "english" / "rus" aliases are accepted too.
 WindUI:SetLanguage("eng")
-if WindUI:GetLanguage() ~= "en" or Panel:GetValue("ReworkLanguage") ~= "en" then
-	error("the 'eng' alias did not switch the language or sync the row", 0)
+if WindUI:GetLanguage() ~= "en" then
+	error("the 'eng' alias did not switch the language", 0)
 end
-WindUI:SetLanguage("ru")
--- Section lookups must survive a language change.
-if not Panel:GetSection("Комбат") or not Panel:GetSection("Combat") then
-	error("GetSection() is not language-independent", 0)
+if tostring(Panel.Sections[1].UIElements.TitleLabel.Text) ~= "Combat" then
+	error("panel header did not switch back to ENG", 0)
 end
+WindUI:SetLanguage("rus")
+if WindUI:GetLanguage() ~= "ru" then
+	error("the 'rus' alias did not switch the language", 0)
+end
+WindUI:SetLanguage("en")
 
--- Switching theme from the UI: every WindUI theme must be available.
-local ThemeRow = Panel:GetItem("ReworkTheme")
-if #ThemeRow.Options < 10 then
-	error("the panel only offers 2 themes instead of the WindUI theme list", 0)
+-- Themes are chosen from CODE like in the original WindUI.
+local Themes = WindUI:GetThemes()
+local themeCount = 0
+for _ in pairs(Themes) do
+	themeCount += 1
 end
-Panel:SetValue("ReworkTheme", "Light")
-if WindUI:GetCurrentTheme() ~= "Light" then
-	error("theme row did not switch to Light", 0)
+if themeCount < 16 then
+	error("original WindUI theme list is incomplete", 0)
 end
-WindUI:SetTheme("Dark")
-if WindUI:GetCurrentTheme() ~= "Dark" then
-	error("WindUI:SetTheme('Dark') failed", 0)
+WindUI:SetTheme("Rose")
+if WindUI:GetCurrentTheme() ~= "Rose" then
+	error("WindUI:SetTheme('Rose') failed", 0)
 end
-if Panel:GetValue("ReworkTheme") ~= "Dark" then
-	error("theme row did not follow a code-side theme switch", 0)
-end
-
--- A 3+ option row opens a real list instead of cycling 16 times.
-ThemeRow.UIElements.Row.Activated:Fire()
-local ChoicePopup = Panel.UIElements.ChoicePopup
-if not ChoicePopup or not ChoicePopup.Visible then
-	error("clicking the theme row did not open the theme list", 0)
-end
-local optionButtons = {}
-for _, child in ipairs(Panel.UIElements.ChoiceList:GetChildren()) do
-	if child.Name ~= "Layout" then
-		optionButtons[#optionButtons + 1] = child
-	end
-end
-if #optionButtons < 10 then
-	error("theme list popup is empty", 0)
-end
-for _, button in ipairs(optionButtons) do
-	if tostring(button.Text) == "Rose" then
-		button.Activated:Fire()
-		break
-	end
-end
-if WindUI:GetCurrentTheme() ~= "Rose" or ChoicePopup.Visible then
-	error("picking a theme from the popup did not apply it / close the list", 0)
+WindUI:SetTheme("Monokai Pro") -- pretty Name works too
+if WindUI:GetCurrentTheme() ~= "MonokaiPro" then
+	error("SetTheme() did not resolve a pretty theme Name", 0)
 end
 WindUI:SetTheme("Dark")
 
--- Loading can be disabled both from the UI and from code
-Panel:SetValue("ReworkLoading", false)
-if WindUI.LoadingScreen.Enabled ~= false then
-	error("loading toggle did not disable the overlay", 0)
-end
+-- Loading is configured from CODE only.
 WindUI:SetLoadingEnabled(false)
+if WindUI.LoadingScreen.Enabled ~= false then
+	error("SetLoadingEnabled(false) did not disable the overlay", 0)
+end
 
 -- Bug 4: locked slider must not keep an Active hit surface.
 local LockedSlider = Tab:Slider({
@@ -720,6 +705,6 @@ if #WindUI.Creator.Signals ~= 0 then
 end
 
 print(string.format(
-	"bundle_smoke: OK (WindUI v%s | window, zero sliders, profile panel, PC open button, settings RU/EN + themes + loading, guards)",
+	"bundle_smoke: OK (WindUI v%s | window, zero sliders, Combat/Visuals panel, ENG default, open button hidden while menu is open, guards)",
 	tostring(WindUI.Version)
 ))

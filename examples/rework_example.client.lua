@@ -14,8 +14,22 @@ local WindUI = loadstring(game:HttpGet(
 ))()
 
 WindUI:SetAnimationProfile("Smooth") -- Smooth | Snappy | Calm | Reduced | None
-WindUI:SetTheme("Dark")
 WindUI.TransparencyValue = 0.18
+
+----------------------------------------------------------------------
+-- Язык и темы настраиваются ТОЛЬКО из кода, как в оригинальном WindUI
+----------------------------------------------------------------------
+-- Язык: RU / ENG, по умолчанию ENG (ничего писать не нужно).
+-- WindUI:SetLanguage("ru")   -- переключить на русский
+-- WindUI:SetLanguage("eng")  -- либо "en", "english", "rus", "russian"
+--
+-- Тема: любая тема оригинального WindUI задаётся из кода:
+--   Dark, Light, Rose, Plant, Red, Indigo, Sky, Violet, Amber,
+--   Emerald, Midnight, Crimson, MonokaiPro, CottonCandy,
+--   Mellowsi, Rainbow
+-- WindUI:SetTheme("Rose")    -- или Theme = "Rose" в CreateWindow
+WindUI:SetTheme("Dark")
+print("Темы:", WindUI:GetThemes(), "| текущая:", WindUI:GetCurrentTheme())
 
 ----------------------------------------------------------------------
 -- Окно + Key System
@@ -31,15 +45,13 @@ local Window = WindUI:CreateWindow({
 	NewElements = true,
 	ToggleKey = "RightShift",            -- строка, Enum.KeyCode или список
 
-	-- Язык / тема / загрузка: и из кода, и кликом в панели профиля
-	Theme = "Dark",
-	Language = "ru",                     -- "ru" | "en"
-	Settings = { Language = "ru" },      -- Settings = false скрывает секцию
+	-- Язык по умолчанию ENG. Раскомментируйте, чтобы стартовать с RU:
+	-- Language = "ru",
+	Theme = "Dark",                      -- тема из кода, как в оригинале
 	Loading = false,                     -- true или { Enabled = true, Duration = 1.2 }
 
-	-- В панели аккаунта есть секция «Настройки»: кликом меняется язык
-	-- RU / ENG и ЛЮБАЯ тема WindUI (Dark, Light, Rose, Violet, Midnight …)
-	-- — править код для смены темы/языка не нужно.
+	-- Панель аккаунта содержит ТОЛЬКО списки «Комбат» и «Визуалы».
+	-- Никакой секции «Настройки» в ней нет.
 
 	-- ▼▼▼ KEY SYSTEM: единственный рабочий ключ — test ▼▼▼
 	KeySystem = {
@@ -56,14 +68,13 @@ local Window = WindUI:CreateWindow({
 	User = { Enabled = true, Anonymous = false },
 
 	-- Кнопка открытия меню: ПК, телефон и геймпад.
-	-- StayVisible = false => пока меню открыто кнопки нет, а как только
-	-- меню закрыли/скрыли — кнопка сразу появляется (и открывает его).
+	-- Пока меню ОТКРЫТО кнопки нет вообще. Как только меню закрыли /
+	-- скрыли — кнопка сразу появляется и открывает его обратно.
 	OpenButton = {
 		Enabled = true,
 		OnlyMobile = false,
-		StayVisible = false,
 		Draggable = true,
-		-- Title = "Открыть UI",  -- без Title подпись локализуется: Открыть / Open
+		-- Title = "Открыть UI",  -- без Title подпись локализуется: Open / Открыть
 		CornerRadius = UDim.new(1, 0),
 		Color = ColorSequence.new(Color3.fromHex("40c9ff"), Color3.fromHex("e81cff")),
 	},

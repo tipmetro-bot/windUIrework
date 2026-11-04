@@ -4,7 +4,7 @@
     | |/ |/ / / _ \/ _  / /_/ // /  
     |__/|__/_/_//_/\_,_/\____/___/
     
-    v1.6.66-rework.1  |  2026-11-03  |  WindUI Rework: Roblox UI library with a PC/mobile open button, zero-safe sliders, smooth animations and a Neverlose-style profile panel
+    v1.6.66-rework.1  |  2026-11-04  |  WindUI Rework: Roblox UI library with a PC/mobile open button, zero-safe sliders, smooth animations and a Neverlose-style profile panel
     
     To view the source code, see the `src/` folder on the official GitHub repository.
     
@@ -291,7 +291,7 @@ function WindUI:OnThemeChange(func)
 		return function() end
 	end
 	-- Rework: keep every subscriber. Upstream stored ONE callback, so the
-	-- profile panel's theme row silently disabled the user's own handler.
+	-- a single handler silently dropped every other subscriber.
 	WindUI.ThemeChangeSubscribers = WindUI.ThemeChangeSubscribers or {}
 	WindUI.ThemeChangeSubscribers[#WindUI.ThemeChangeSubscribers + 1] = func
 	return function()
@@ -444,8 +444,8 @@ Creator.Themes = WindUI.Themes
 
 WindUI:SetTheme("Dark")
 
--- Rework: RU/EN is built in and can be switched from the profile panel
--- (or from code with `WindUI:SetLanguage("en")`).
+-- Rework: RU/EN is built in and switched FROM CODE with
+-- WindUI:SetLanguage("ru" | "eng"). Default is ENG.
 WindUI.ReworkLocalization.Install(WindUI, nil)
 WindUI:SetLanguage(WindUI.ReworkLocalization.GetLanguage())
 
@@ -522,16 +522,14 @@ function WindUI:CreateWindow(Config)
 		Creator.SetTheme(WindUI.Theme or WindUI.Themes.Dark)
 	end
 
-	-- Rework: language + loading are configurable from code.
-	local Settings = type(Config.Settings) == "table" and Config.Settings or {}
-	local requestedLanguage = Config.Language or Settings.Language
-	if requestedLanguage then
-		WindUI:SetLanguage(requestedLanguage)
+	-- Rework: language + loading are configurable from CODE only.
+	-- Default language is ENG; RU is `Language = "ru"` / SetLanguage("ru").
+	-- Themes are chosen like in the original WindUI: `Theme = "Rose"`
+	-- in CreateWindow or `WindUI:SetTheme("Rose")`.
+	if Config.Language then
+		WindUI:SetLanguage(Config.Language)
 	end
 	local loadingConfig = Config.Loading
-	if loadingConfig == nil then
-		loadingConfig = Settings.Loading
-	end
 	WindUI.LoadingScreen = LoadingScreen.New(WindUI, loadingConfig)
 	WindUI.LoadingEnabled = WindUI.LoadingScreen.Enabled
 
@@ -665,7 +663,6 @@ function WindUI:CreateWindow(Config)
 	end
 
 	Window.LoadingScreen = WindUI.LoadingScreen
-	Window.Settings = Settings
 	WindUI.Transparent = Config.Transparent
 	WindUI.Window = Window
 
@@ -31444,15 +31441,12 @@ return function(Config)
 		if Window.ProfilePanel then
 			return Window.ProfilePanel
 		end
+		-- The account panel contains ONLY the Combat / Visuals lists.
+		-- Language (RU/ENG, default ENG) and WindUI themes are chosen from
+		-- code (WindUI:SetLanguage / WindUI:SetTheme) like in the original
+		-- library -- there is deliberately no settings section here.
 		local Panel = ProfilePanel.New(Window, ProfileConfig or {}, Config.WindUI)
 		Window.ProfilePanel = Panel
-		-- Rework: RU/EN + Dark/Light + loading toggles live in the panel.
-		-- Set `Settings = false` in CreateWindow to hide that section.
-		if Config.Settings ~= false and Panel.AddSettings then
-			pcall(function()
-				Panel:AddSettings()
-			end)
-		end
 		return Panel
 	end
 
@@ -31676,13 +31670,8 @@ return function(Config)
 			end
 
 			if Window.OpenButtonMain and Window.IsOpenButtonEnabled then
-				-- With `StayVisible = true` the button remains on screen and
-				-- acts as an open/close toggle on PC *and* on phones.
-				if Window.OpenButtonMain.StayVisible then
-					Window.OpenButtonMain:Visible(true)
-				else
-					Window.OpenButtonMain:Visible(false)
-				end
+				-- The menu is open: the open button must be gone, always.
+				Window.OpenButtonMain:Visible(false)
 			end
 
 			--[[Config.WindUI.UIScaleObj.Scale -= 1 - 0.85
@@ -32041,9 +32030,8 @@ return function(Config)
 		Window:EditOpenButton(Window.OpenButton)
 	end
 
-	-- `Window.Profile = {...}` (or `Settings = {...}`) builds the panel.
-	local wantsSettings = Config.Settings ~= nil and Config.Settings ~= false
-	if (Window.ProfileConfig and typeof(Window.ProfileConfig) == "table") or wantsSettings then
+	-- `Window.Profile = {...}` builds the Combat / Visuals panel.
+	if Window.ProfileConfig and typeof(Window.ProfileConfig) == "table" then
 		task.defer(function()
 			if not Window.Destroyed and not Window.ProfilePanel then
 				Window:Profile(Window.ProfileConfig or {})
@@ -32885,16 +32873,17 @@ __WINDUI_MODULES["src/components/window/Openbutton.lua"] = function()
         on a phone can no longer be ignored or fired twice;
       * `Edit()` no longer corrupts `Window.IsPC`, handles Draggable=true,
         nil-safety, OnlyIcon, Enabled=false and a custom Position;
-      * show/hide is animated (fade + slide + spring scale) and supports
-        `StayVisible`, which turns the button into a real open/close
-        toggle that stays on screen while the window is open.
+      * show/hide is animated (fade + slide + spring scale on appear);
+        hiding is immediate and unconditional: the button exists ONLY
+        while the menu is closed/hidden and never covers an open menu.
 
-    New config keys for `Window:EditOpenButton{...}`:
-      Enabled      = true  | show the button at all
+    Config keys for `Window:EditOpenButton{...}`:
+      Enabled      = true  | show the button at all (when menu is closed)
       OnlyMobile   = false | set true to show it only on touch devices
-      StayVisible  = false | keep visible while the window is open
       Draggable    = true  | allow moving the button
       ShowOnPC     = true  | alias for OnlyMobile=false
+      StayVisible  = DEPRECATED / ignored (the button always hides while
+                     the menu is open)
 ]]
 
 local Creator = __WINDUI_REQUIRE("src/modules/Creator.lua")
@@ -33215,28 +33204,17 @@ function OpenButton.New(Window)
 		if self.Destroyed or not Title then
 			return self
 		end
-		local key
-		if self.StayVisible and self.WindowClosed and self.CustomTitle then
-			-- A real toggle, but respect a user-supplied label for "open".
+		if self.CustomTitle then
 			Title.Text = self.CustomTitle
 			pcall(function()
 				Creator:ChangeTranslationKey(Title, self.CustomTitle)
 			end)
 			return self
-		elseif self.StayVisible then
-			key = self.WindowClosed and "open" or "close"
-		elseif self.CustomTitle then
-			Title.Text = self.CustomTitle
-			pcall(function()
-				Creator:ChangeTranslationKey(Title, self.CustomTitle)
-			end)
-			return self
-		else
-			key = "open"
 		end
-		Title.Text = Localization.Get(key)
+		-- It only ever says "Open" — the button is hidden while the menu is open.
+		Title.Text = Localization.Get("open")
 		pcall(function()
-			Creator:ChangeTranslationKey(Title, Localization.Key(key))
+			Creator:ChangeTranslationKey(Title, Localization.Key("open"))
 		end)
 		return self
 	end
@@ -33244,7 +33222,7 @@ function OpenButton.New(Window)
 	function OpenButtonMain:SetOpenState(windowClosed)
 		local closed = windowClosed == true
 		self.WindowClosed = closed
-		-- Always refresh: StayVisible / language may have changed even when
+		-- Always refresh: the language may have changed even when
 		-- the window state did not.
 		return self:RefreshTitle()
 	end
@@ -33260,9 +33238,9 @@ function OpenButton.New(Window)
 		if self.OnlyMobile and Window.IsMobile == false then
 			return false
 		end
-		if self.StayVisible then
-			return true
-		end
+		-- Rework: the button exists ONLY while the menu is closed / hidden.
+		-- `StayVisible` is intentionally ignored -- the button must never
+		-- cover an open menu on PC, phone or console.
 		return Window.Closed == true
 	end
 
@@ -33272,6 +33250,10 @@ function OpenButton.New(Window)
 		end
 		if value == nil then
 			value = self:ShouldShow()
+		elseif value == true and not self:ShouldShow() then
+			-- Even an explicit :Visible(true) cannot put the button over
+			-- an open menu.
+			value = false
 		end
 		VisibilityToken = VisibilityToken + 1
 		local token = VisibilityToken
@@ -33311,21 +33293,12 @@ function OpenButton.New(Window)
 				PulseHandle:Stop()
 				PulseHandle = nil
 			end
-			if not Container.Visible then
-				Container.GroupTransparency = 1
-				return
-			end
-			Animations:Play(Container, "Close", {
-				GroupTransparency = 1,
-			}, "Quint", "InOut")
-			Animations:Play(UIScale, "Close", {
-				Scale = (OpenButtonMain.BaseScale or 1) * 0.9,
-			}, "Quint", "InOut")
-			task.delay(Animations:Get("Close") + 0.02, function()
-				if token == VisibilityToken and not self:ShouldShow() and not self.VisibleState then
-					Container.Visible = false
-				end
-			end)
+		-- Rework: hide IMMEDIATELY. A fade-out plus a delayed
+		-- `Container.Visible = false` left the button on top of an open
+		-- menu on low FPS / when the animation callback was cancelled.
+		Container.GroupTransparency = 1
+		Container.Visible = false
+		UIScale.Scale = (OpenButtonMain.BaseScale or 1) * 0.9
 		end
 	end
 
@@ -33405,8 +33378,9 @@ function OpenButton.New(Window)
 		else
 			self.OnlyMobile = false
 		end
-		self.StayVisible = Module.StayVisible == true
-		-- Refresh the label for the new StayVisible value.
+		-- Deprecated: the button must never stay on top of an open menu.
+		self.StayVisible = false
+		-- Refresh the label for the new state.
 		local wasClosed = self.WindowClosed
 		self.WindowClosed = nil
 		self:SetOpenState(wasClosed)
@@ -33519,7 +33493,7 @@ __WINDUI_MODULES["src/components/window/ProfilePanel.lua"] = function()
 --[[
     WindUI Rework / ProfilePanel
     ------------------------------------------------------------------
-    A Neverlose-style profile/settings popup anchored in the BOTTOM-LEFT
+    A Neverlose-style profile popup anchored in the BOTTOM-LEFT
     corner of the window, right above (and slightly overlapping) the user
     card that WindUI draws in the sidebar.
 
@@ -33611,8 +33585,9 @@ local function NormaliseBoolean(value, fallback)
 	return fallback == true
 end
 
--- Rework: "Choice" rows are a compact two/three-state selector used for
--- the RU/EN language switch and the Dark/Light theme switch.
+-- Generic "Choice" rows let custom panels offer a compact
+-- option selector. The built-in settings section was removed: language
+-- and themes are configured from code, like in the original WindUI.
 local function NormaliseOptions(options)
 	local result = {}
 	for _, option in ipairs(options or {}) do
@@ -33637,61 +33612,6 @@ local function OptionLabel(option, language)
 		return Localization.Get(option.LabelKey, language)
 	end
 	return tostring(option.Label ~= nil and option.Label or option.Value)
-end
-
---- WindUI ships many themes (Dark, Light, Rose, Plant, Red, Indigo, Sky,
---- Violet, Amber, Emerald, Midnight, Crimson, Monokai Pro, Cotton Candy,
---- Mellowsi, Rainbow). Build the list from the library itself instead of
---- hard-coding Dark/Light, so custom AddTheme() entries show up too.
-local function ThemeKeyOf(WindUI, value)
-	if not WindUI or not WindUI.GetThemes then
-		return value
-	end
-	local themes = WindUI:GetThemes() or {}
-	if themes[value] then
-		return value
-	end
-	for key, theme in pairs(themes) do
-		if type(theme) == "table" and (theme.Name == value or key == value) then
-			return key
-		end
-	end
-	return value
-end
-
-local function BuildThemeOptions(WindUI)
-	local options = {}
-	local themes = WindUI and WindUI.GetThemes and WindUI:GetThemes() or nil
-	if type(themes) == "table" then
-		local names = {}
-		for key, theme in pairs(themes) do
-			if type(theme) == "table" then
-				names[#names + 1] = {
-					Value = key,
-					Label = tostring(theme.Name or key),
-				}
-			end
-		end
-		table.sort(names, function(a, b)
-			-- Dark / Light first, then alphabetical.
-			local rank = { Dark = 0, Light = 1 }
-			local ra, rb = rank[a.Value] or 2, rank[b.Value] or 2
-			if ra ~= rb then
-				return ra < rb
-			end
-			return a.Label < b.Label
-		end)
-		for _, entry in ipairs(names) do
-			options[#options + 1] = entry
-		end
-	end
-	if #options == 0 then
-		options = {
-			{ Value = "Dark", LabelKey = "theme.dark" },
-			{ Value = "Light", LabelKey = "theme.light" },
-		}
-	end
-	return options
 end
 
 local function NormalizeText(value)
@@ -34503,11 +34423,6 @@ function ProfilePanel.New(Window, Config, WindUI)
 			end
 			if IsChoice then
 				local wanted = value
-				if Item.Flag == "ReworkLanguage" then
-					wanted = Localization.Normalise(value) or wanted
-				elseif Item.Flag == "ReworkTheme" then
-					wanted = ThemeKeyOf(WindUI, value)
-				end
 				local index
 				for i, option in ipairs(Options) do
 					if option.Value == wanted then
@@ -34756,90 +34671,6 @@ function ProfilePanel.New(Window, Config, WindUI)
 		return Section
 	end
 
-	------------------------------------------------------------------
-	-- Built-in settings (language, theme, loading, config autoload)
-	-- Everything here is clickable in the UI: no code editing required.
-	------------------------------------------------------------------
-	function self:AddSettings()
-		if self.SettingsAdded then
-			return self.SettingsSection
-		end
-		self.SettingsAdded = true
-
-		local WindUI = self.WindUI
-		local Section = self:AddSection({
-			Title = Localization.Get("settings"),
-			TitleKey = "settings",
-			Icon = "settings",
-			Expanded = true,
-		})
-
-		Section:AddItem({
-			Type = "Choice",
-			Title = Localization.Get("language"),
-			TitleKey = "language",
-			Flag = "ReworkLanguage",
-			Options = {
-				{ Value = "ru", LabelKey = "language.ru" },
-				{ Value = "en", LabelKey = "language.en" },
-			},
-			Default = Localization.GetLanguage(),
-			Callback = function(value)
-				Localization.SetLanguage(WindUI, value)
-			end,
-		})
-
-		Section:AddItem({
-			Type = "Choice",
-			Title = Localization.Get("theme"),
-			TitleKey = "theme",
-			Flag = "ReworkTheme",
-			-- Every theme shipped by WindUI (plus any AddTheme() entries).
-			Options = BuildThemeOptions(WindUI),
-			Default = ThemeKeyOf(WindUI, (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()) or "Dark"),
-			Callback = function(value)
-				if WindUI.SetTheme then
-					WindUI:SetTheme(value)
-				end
-			end,
-		})
-
-		Section:AddItem({
-			Type = "Toggle",
-			Title = Localization.Get("loading"),
-			TitleKey = "loading",
-			Flag = "ReworkLoading",
-			Default = WindUI.LoadingEnabled == true,
-			Callback = function(value)
-				if WindUI.SetLoadingEnabled then
-					WindUI:SetLoadingEnabled(value)
-				end
-				if Window.Settings then
-					Window.Settings.Loading = value
-				end
-			end,
-		})
-
-		Section:AddItem({
-			Type = "Toggle",
-			Title = Localization.Get("autoload"),
-			TitleKey = "autoload",
-			Flag = "ReworkAutoLoad",
-			Default = Config.AutoLoad ~= false,
-			Callback = function(value)
-				Config.AutoLoad = value == true
-				if self.ConfigModule and self.ConfigModule.SetAutoLoad then
-					pcall(function()
-						self.ConfigModule:SetAutoLoad(value)
-					end)
-				end
-			end,
-		})
-
-		self.SettingsSection = Section
-		return Section
-	end
-
 	function self:RefreshLanguage(language)
 		local lang = Localization.Normalise(language) or Localization.GetLanguage()
 		CloseChoicePopup()
@@ -34861,16 +34692,8 @@ function ProfilePanel.New(Window, Config, WindUI)
 				item.UIElements.Label.Text = item.Title
 			end
 			if item.Type == "Choice" then
-				local wanted = item.Value
-				if item.Flag == "ReworkLanguage" then
-					-- The row must mirror the ACTUAL library language.
-					-- WindUI:SetLanguage("ru") used to leave it on "en".
-					wanted = lang
-				elseif item.Flag == "ReworkTheme" then
-					wanted = ThemeKeyOf(self.WindUI,
-						(self.WindUI.GetCurrentTheme and self.WindUI:GetCurrentTheme()) or wanted)
-				end
-				item:Set(wanted, false)
+				-- Re-render the option label in the new language.
+				item:Set(item.Value, false)
 			end
 		end
 		return self
@@ -34881,27 +34704,6 @@ function ProfilePanel.New(Window, Config, WindUI)
 			self:RefreshLanguage(language)
 		end
 	end)
-
-	-- A theme changed from code (WindUI:SetTheme / Creator.SetTheme) must
-	-- be reflected in the panel row, and clicking the row must not recurse.
-	local function SyncTheme(value)
-		if self.Destroyed then
-			return
-		end
-		local item = self:GetItem("ReworkTheme")
-		if item then
-			item:Set(ThemeKeyOf(self.WindUI, value), false)
-		end
-	end
-
-	if WindUI and WindUI.OnThemeChange then
-		self.ThemeUnsubscribe = WindUI:OnThemeChange(SyncTheme)
-	end
-	if WindUI and WindUI.Creator and WindUI.Creator.OnThemeChange then
-		self.CreatorThemeConnection = WindUI.Creator:OnThemeChange(function(theme)
-			SyncTheme(theme and theme.Name or (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()))
-		end)
-	end
 
 	-- Public convenience API (the UI rows call these too).
 	function self:SetLanguage(language)
@@ -35090,16 +34892,6 @@ function ProfilePanel.New(Window, Config, WindUI)
 		if self.LanguageUnsubscribe then
 			pcall(self.LanguageUnsubscribe)
 			self.LanguageUnsubscribe = nil
-		end
-		if self.ThemeUnsubscribe then
-			pcall(self.ThemeUnsubscribe)
-			self.ThemeUnsubscribe = nil
-		end
-		if self.CreatorThemeConnection then
-			pcall(function()
-				self.CreatorThemeConnection:Disconnect()
-			end)
-			self.CreatorThemeConnection = nil
 		end
 		CloseChoicePopup()
 		if self.StaggerHandle then
@@ -42435,7 +42227,7 @@ local Translations = {
 	},
 }
 
-local CurrentLanguage = "ru"
+local CurrentLanguage = "en"
 local Subscribers = {}
 
 function Localization.Languages()
@@ -42500,7 +42292,7 @@ function Localization.Install(WindUI, language)
 			Enabled = true,
 			Translations = {},
 			Prefix = "loc:",
-			DefaultLanguage = "ru",
+			DefaultLanguage = "en",
 		})
 	end
 	if type(existing) ~= "table" then
@@ -42516,9 +42308,9 @@ function Localization.Install(WindUI, language)
 		end
 	end
 
-	CurrentLanguage = Localization.Normalise(language)
-		or Localization.Normalise(Creator.Language)
-		or "en"
+	-- Default is ENG, independent of the OS/Studio locale. RU is opt-in
+	-- via Install(WindUI, "ru"), Config.Language or WindUI:SetLanguage("ru").
+	CurrentLanguage = Localization.Normalise(language) or "en"
 	WindUI:SetLanguage(CurrentLanguage)
 	WindUI.ReworkLanguage = CurrentLanguage
 	return true

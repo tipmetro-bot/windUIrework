@@ -3,6 +3,17 @@
 База: [Footagesus/WindUI](https://github.com/Footagesus/WindUI) v1.6.66 (`d2c9bac`, 2026‑11‑02).
 Версия реворка: `1.6.66-rework.1` (2026‑11‑03).
 
+## Последняя правка: панель аккаунта и кнопка меню
+
+> Этот раздел описывает **текущее** поведение и отменяет более ранние записи
+> про секцию «Настройки» в панели и про `StayVisible`.
+
+- **Убрана секция «Настройки» из панели аккаунта.** Панель содержит ровно два списка — «Комбат» (`сайлент аим`, `аимбот`, `триггербот`, `kill all`) и «Визуалы» (`esp`, `esp box`, `esp skeleton`), как на приложенном скриншоте. Удалены строки `ReworkLanguage`, `ReworkTheme`, `ReworkLoading`, `ReworkAutoLoad`, сам метод `:AddSettings()` и авто-вызов из `Window:Profile()`, а также конфиг `Settings` в `CreateWindow`.
+- **Язык: RU / ENG, по умолчанию ENG.** `ReworkLocalization` стартует с `en` независимо от системной локали, `LocalizationModule.DefaultLanguage = "en"`. Переключение только из кода: `WindUI:SetLanguage("ru" | "eng")`, `Language = "ru"` в `CreateWindow`. Алиасы `rus`, `russian`, `english`, `en-us` и т.д. работают. Перевод по-прежнему обновляет все подписи, включая заголовки секций панели.
+- **Темы: как в оригинальном WindUI, из кода.** `Theme = "Rose"` / `WindUI:SetTheme("Rose")`, все 16 тем доступны через `GetThemes()`, `AddTheme()`, `OnThemeChange()`. Никакого UI-выбора тем в панели больше нет.
+- **Кнопка открытия меню гарантированно скрыта, пока меню открыто.** `ShouldShow()` теперь зависит только от `Window.Closed`; `StayVisible` устарел и игнорируется, а `Visible(true)` не может показать кнопку поверх открытого меню. Скрытие мгновенное (без `task.delay`), появление по-прежнему анимировано. Подпись кнопки всегда «Open» / «Открыть».
+- Обновлены README, пример `examples/rework_example.client.lua` (ключ `test` сохранён) и smoke-тест: он проверяет, что в панели ровно 2 секции и нет строк настроек, что язык по умолчанию ENG, что темы меняются из кода и что кнопка скрыта при открытом меню.
+
 ## Исправления
 
 ### Кнопка открытия / закрытия
@@ -100,7 +111,7 @@
 luau-compile --null --only-parse <все Luau-файлы>    OK
 luau-compile --null dist/main.lua                    OK
 luau tests/slider_math_test.luau                    47 checks, 0 failures
-python3 tools/smoke_test.py                         bundle + settings RU/EN + themes + loading + guards: ALL OK
+python3 tools/smoke_test.py                         bundle + ENG default + code-side RU/ENG + WindUI themes + hidden open button: ALL OK
 node tools/check_syntax.mjs                         90 Luau files parsed OK
 python3 tools/bundle.py --check                      up to date
 ```

@@ -11,16 +11,17 @@
         on a phone can no longer be ignored or fired twice;
       * `Edit()` no longer corrupts `Window.IsPC`, handles Draggable=true,
         nil-safety, OnlyIcon, Enabled=false and a custom Position;
-      * show/hide is animated (fade + slide + spring scale) and supports
-        `StayVisible`, which turns the button into a real open/close
-        toggle that stays on screen while the window is open.
+      * show/hide is animated (fade + slide + spring scale on appear);
+        hiding is immediate and unconditional: the button exists ONLY
+        while the menu is closed/hidden and never covers an open menu.
 
-    New config keys for `Window:EditOpenButton{...}`:
-      Enabled      = true  | show the button at all
+    Config keys for `Window:EditOpenButton{...}`:
+      Enabled      = true  | show the button at all (when menu is closed)
       OnlyMobile   = false | set true to show it only on touch devices
-      StayVisible  = false | keep visible while the window is open
       Draggable    = true  | allow moving the button
       ShowOnPC     = true  | alias for OnlyMobile=false
+      StayVisible  = DEPRECATED / ignored (the button always hides while
+                     the menu is open)
 ]]
 
 local Creator = require("../../modules/Creator")
@@ -341,28 +342,17 @@ function OpenButton.New(Window)
 		if self.Destroyed or not Title then
 			return self
 		end
-		local key
-		if self.StayVisible and self.WindowClosed and self.CustomTitle then
-			-- A real toggle, but respect a user-supplied label for "open".
+		if self.CustomTitle then
 			Title.Text = self.CustomTitle
 			pcall(function()
 				Creator:ChangeTranslationKey(Title, self.CustomTitle)
 			end)
 			return self
-		elseif self.StayVisible then
-			key = self.WindowClosed and "open" or "close"
-		elseif self.CustomTitle then
-			Title.Text = self.CustomTitle
-			pcall(function()
-				Creator:ChangeTranslationKey(Title, self.CustomTitle)
-			end)
-			return self
-		else
-			key = "open"
 		end
-		Title.Text = Localization.Get(key)
+		-- It only ever says "Open" — the button is hidden while the menu is open.
+		Title.Text = Localization.Get("open")
 		pcall(function()
-			Creator:ChangeTranslationKey(Title, Localization.Key(key))
+			Creator:ChangeTranslationKey(Title, Localization.Key("open"))
 		end)
 		return self
 	end
@@ -370,7 +360,7 @@ function OpenButton.New(Window)
 	function OpenButtonMain:SetOpenState(windowClosed)
 		local closed = windowClosed == true
 		self.WindowClosed = closed
-		-- Always refresh: StayVisible / language may have changed even when
+		-- Always refresh: the language may have changed even when
 		-- the window state did not.
 		return self:RefreshTitle()
 	end
@@ -386,9 +376,9 @@ function OpenButton.New(Window)
 		if self.OnlyMobile and Window.IsMobile == false then
 			return false
 		end
-		if self.StayVisible then
-			return true
-		end
+		-- Rework: the button exists ONLY while the menu is closed / hidden.
+		-- `StayVisible` is intentionally ignored -- the button must never
+		-- cover an open menu on PC, phone or console.
 		return Window.Closed == true
 	end
 
@@ -398,6 +388,10 @@ function OpenButton.New(Window)
 		end
 		if value == nil then
 			value = self:ShouldShow()
+		elseif value == true and not self:ShouldShow() then
+			-- Even an explicit :Visible(true) cannot put the button over
+			-- an open menu.
+			value = false
 		end
 		VisibilityToken = VisibilityToken + 1
 		local token = VisibilityToken
@@ -437,21 +431,12 @@ function OpenButton.New(Window)
 				PulseHandle:Stop()
 				PulseHandle = nil
 			end
-			if not Container.Visible then
-				Container.GroupTransparency = 1
-				return
-			end
-			Animations:Play(Container, "Close", {
-				GroupTransparency = 1,
-			}, "Quint", "InOut")
-			Animations:Play(UIScale, "Close", {
-				Scale = (OpenButtonMain.BaseScale or 1) * 0.9,
-			}, "Quint", "InOut")
-			task.delay(Animations:Get("Close") + 0.02, function()
-				if token == VisibilityToken and not self:ShouldShow() and not self.VisibleState then
-					Container.Visible = false
-				end
-			end)
+		-- Rework: hide IMMEDIATELY. A fade-out plus a delayed
+		-- `Container.Visible = false` left the button on top of an open
+		-- menu on low FPS / when the animation callback was cancelled.
+		Container.GroupTransparency = 1
+		Container.Visible = false
+		UIScale.Scale = (OpenButtonMain.BaseScale or 1) * 0.9
 		end
 	end
 
@@ -531,8 +516,9 @@ function OpenButton.New(Window)
 		else
 			self.OnlyMobile = false
 		end
-		self.StayVisible = Module.StayVisible == true
-		-- Refresh the label for the new StayVisible value.
+		-- Deprecated: the button must never stay on top of an open menu.
+		self.StayVisible = false
+		-- Refresh the label for the new state.
 		local wasClosed = self.WindowClosed
 		self.WindowClosed = nil
 		self:SetOpenState(wasClosed)

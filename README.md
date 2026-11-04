@@ -16,12 +16,13 @@
 5. [Слайдеры и баг с нулём](#слайдеры-и-баг-с-нулём)
 6. [Анимации](#анимации)
 7. [Панель профиля (Neverlose‑style)](#панель-профиля-neverlose-style)
-8. [ConfigManager / сохранение настроек](#configmanager--сохранение-настроек)
-9. [Полный API](#полный-api)
-10. [Сборка из исходников и тесты](#сборка-из-исходников-и-тесты)
-11. [Структура репозитория](#структура-репозитория)
-12. [Откуда взят код (GitHub API)](#откуда-взят-код-github-api)
-13. [Благодарности и лицензия](#благодарности-и-лицензия)
+8. [Язык и темы — из кода](#язык-и-темы--из-кода)
+9. [ConfigManager / сохранение настроек](#configmanager--сохранение-настроек)
+10. [Полный API](#полный-api)
+11. [Сборка из исходников и тесты](#сборка-из-исходников-и-тесты)
+12. [Структура репозитория](#структура-репозитория)
+13. [Откуда взят код (GitHub API)](#откуда-взят-код-github-api)
+14. [Благодарности и лицензия](#благодарности-и-лицензия)
 
 ---
 
@@ -29,7 +30,7 @@
 
 | # | Что | Было в оригинале | Стало |
 |---|-----|------------------|-------|
-| 1 | **OpenButton** | Показывался только когда `not Window.IsPC`, т.е. на ПК его не было; клик висел на `MouseButton1Click`; `Edit()` обнулял `Window.IsPC` и не умел `Draggable = true` | Показывается на ПК, телефонах и консолях; `Activated` + `MouseButton1Click` + `TouchTap` с debounce; `StayVisible` превращает кнопку в полноценный open/close toggle; корректный `Edit()` |
+| 1 | **OpenButton** | Показывался только когда `not Window.IsPC`, т.е. на ПК его не было; клик висел на `MouseButton1Click`; `Edit()` обнулял `Window.IsPC` и не умел `Draggable = true` | Показывается на ПК, телефонах и консолях; `Activated` + `MouseButton1Click` + `TouchTap` с debounce; кнопка **всегда скрыта, пока меню открыто**; корректный `Edit()` |
 | 2 | **Клавиша ToggleKey** | Только `Enum.KeyCode`, без debounce | `Enum.KeyCode`, строка (`"RightShift"`) или список; защита от автоповтора; на телефоне работает кнопка |
 | 3 | **Слайдеры с `0`** | `Min/Max = 0` → деление `0/0 = nan`; `Step = 0` → деление на ноль; `:Set(0)` и загрузка конфига с `0` молча пропускались (`if Value ~= LastValue`); тач‑драг «залипал» | Нормализация чисел, диапазон всегда `> 0`, `Step > 0`, снап относительно `Min`, кламп в `[Min, Max]`, `:Set(0)` всегда обновляет UI и вызывает колбэк; тач использует `InputChanged` и сравнение по типу ввода |
 | 4 | **Анимации** | Разрозненные твины `0.04` / `0.8` / `0.9`, линейные переходы, мгновенный `Visible = false` | Единый модуль `Animations`: профили `Smooth / Snappy / Calm / Reduced / None`, Quint/Exponential/Back, fade + slide + spring‑scale, stagger‑появление списков, ripple, hover/press, пульсация обводки |
@@ -38,7 +39,7 @@
 | 7 | **Сборка** | Нужен `darklua` (Rust) + Rojo + сабмодуль иконок | `python3 tools/bundle.py` собирает `dist/main.lua` без внешних бинарников; иконки завендорены в `src/Icons/` |
 | 8 | **Документация / тесты** | README на 20 строк | Этот README, пример `examples/rework_example.client.lua`, регрессионные тесты `tests/slider_math_test.luau` (47 проверок), smoke‑тест бандла с моками Roblox, CI‑проверка синтаксиса |
 | 9 | **8 багов из чек-листа** | ConfigManager терял Dropdown/Colorpicker и дёргал колбэки при загрузке; Key System создавал окно дважды и тек connections; Dropdown не закрывался по клику вне и не обновлял Options; `Locked`‑слайдер драгался; темы не подхватывали новые ключи; drag игнорировал `GuiInset`; дропдауны уходили под окно; `DisconnectAll` не отключал половину соединений | Всё исправлено: тихий `Load`, `RegisterAll`, `Color3.fromHex("#…")`, `SetValues`, `Input.Position` вместо `Mouse.X/Y`, `Active = false`, `DisplayOrders`, `DisconnectGroup` и `Creator.SuspendCallbacks` |
-| 10 | **Язык, темы, Key System, загрузка** | Не было | Секция «Настройки» в панели профиля: RU/ENG и **все 16 тем WindUI** переключаются кликом из списка; нижние кнопки Get Key / Check Key; настраиваемый из кода экран загрузки (`Loading = false`/`true`/таблица) |
+| 10 | **Язык, темы, Key System, загрузка** | Не было | Язык RU/ENG (**по умолчанию ENG**) и **все 16 тем WindUI** задаются из кода, как в оригинале; в панели аккаунта только списки «Комбат»/«Визуалы», без секции настроек; нижние кнопки Get Key / Check Key; настраиваемый экран загрузки |
 
 ---
 
@@ -82,7 +83,7 @@ local Window = WindUI:CreateWindow({
     Folder = "MyHub",                    -- включает сохранение конфигов
     ToggleKey = "RightShift",           -- ПК
     User = { Enabled = true },          -- карточка профиля внизу слева
-    OpenButton = { Enabled = true, StayVisible = true, Draggable = true },
+    OpenButton = { Enabled = true, Draggable = true },   -- скрыта, пока меню открыто
     Profile = { Config = "default", AutoLoad = true },  -- панель профиля
 })
 
@@ -116,7 +117,7 @@ Tab:Slider({
 * Состояние синхронизируется **мгновенно**: закрыли/скрыли меню → кнопка сразу есть (`Window.Closed = true` → `OpenButtonMain:Refresh()`), открыли → кнопка сразу скрыта. Раньше это делалось внутри корутины через `task.wait(0.06…0.4)` и «терялось» при быстрых переключениях.
 * Подпись кнопки локализована («Открыть» / «Закрыть» / «Open» / «Close») и меняется вместе с языком. Раньше на ней отображался сырой ключ `loc:rework.open`.
 * `Window:Toggle()` больше не имеет глобального debounce — двойной тап и программные переключения работают; фильтруется только автоповтор клавиши в `InputBegan`.
-* `StayVisible = true` оставляет кнопку на экране и при открытом окне (режим «открыть/закрыть»). По умолчанию `false`: пока меню открыто кнопки нет.
+* **Пока меню открыто кнопки нет вообще** — ни при каком конфиге. `StayVisible` устарел и игнорируется; даже явный `:Visible(true)` не покажет кнопку поверх открытого меню. Появление при закрытии анимировано, исчезновение мгновенное.
 * Хитбокс `48 px` на телефонах, ripple, hover/press/spring, плавное появление/скрытие (`GroupTransparency` + `UIScale` + slide).
 * `LastInputTypeChanged` обновляет платформу на лету (подключили клавиатуру к планшету — кнопка не пропадает).
 
@@ -128,7 +129,6 @@ local Window = WindUI:CreateWindow({
     OpenButton = {
         Enabled      = true,    -- false = полностью выключить
         OnlyMobile   = false,   -- true = только телефоны (старое поведение)
-        StayVisible  = true,    -- кнопка видна и при открытом окне
         Draggable    = true,    -- перетаскивание за иконку
         OnlyIcon     = false,
         Title        = "Открыть UI",
@@ -140,7 +140,7 @@ local Window = WindUI:CreateWindow({
     },
 })
 
-Window:EditOpenButton({ StayVisible = false })
+Window:EditOpenButton({ Draggable = false })
 Window:SetToggleKey("RightShift")
 Window:SetOpenButtonEnabled(true)
 Window:Toggle()          -- открыть/закрыть кодом
@@ -151,7 +151,7 @@ Window:Toggle()          -- открыть/закрыть кодом
 | `Enabled` | `true` | Показывать кнопку |
 | `OnlyMobile` | `false` | `true` = только тач‑устройства |
 | `ShowOnPC` | `true` | Алиас, обратный `OnlyMobile` |
-| `StayVisible` | `false` | Не скрывать при открытом окне (режим «открыть/закрыть») |
+| `StayVisible` | — | **Устарел / игнорируется**: кнопка всегда скрыта при открытом меню |
 | `Draggable` | `true` | Перетаскивание |
 | `OnlyIcon` | `false` | Скрыть подпись |
 | `Position`, `Scale`, `Title`, `Icon`, `CornerRadius`, `StrokeThickness`, `Color` | — | Внешний вид |
@@ -325,61 +325,63 @@ Panel:SetTitle("Player")  Panel:SetSubtitle("config: default")
 
 ---
 
-## Настройки прямо в панели профиля (RU/EN, тема, загрузка)
+## Язык и темы — из кода
 
-В панели профиля автоматически появляется секция **«Настройки / Settings»** — всё переключается кликом, без правки кода:
+**Панель аккаунта больше не содержит секции «Настройки».** В ней только два списка — «Комбат» (`сайлент аим`, `аимбот`, `триггербот`, `kill all`) и «Визуалы» (`esp`, `esp box`, `esp skeleton`). Язык и тема задаются **из кода**, как в оригинальном WindUI.
 
-| Строка | Что делает |
-|---|---|
-| **Язык / Language** | `RU ↔ ENG` — переключается вся библиотека (`WindUI:SetLanguage`), включая подписи самой панели, секций «Комбат/Combat», «Визуалы/Visuals», Key System и экрана загрузки. Принимаются `ru`, `eng`, `en`, `english`, `rus` |
-| **Тема оформления** | **Все темы WindUI** (Dark, Light, Rose, Plant, Red, Indigo, Sky, Violet, Amber, Emerald, Midnight, Crimson, Monokai Pro, Cotton Candy, Mellowsi, Rainbow) + добавленные через `AddTheme`. Клик открывает список, выбор сразу применяет тему. Менять тему в коде не нужно |
-| **Экран загрузки** | вкл/выкл оверлея загрузки |
-| **Загружать настройки** | вкл/выкл `AutoLoad` у ConfigManager |
-
-Отключить секцию можно `Settings = false` в `CreateWindow`. Из кода те же вещи настраиваются так:
+### Язык: RU / ENG, по умолчанию ENG
 
 ```lua
-local Window = WindUI:CreateWindow({
-    Title = "My Hub",
-    Theme = "Dark",                       -- стартовая тема
-    Language = "ru",                      -- "ru" | "en"
-    Settings = { Language = "ru" },       -- секция настроек в панели
-    Loading = {                           -- или Loading = true / false
-        Enabled  = true,                  -- надо ли показывать загрузку
-        Duration = 1.2,                   -- секунды; 0 = скрывать вручную
-        Title    = "My Hub",
-        Steps    = { "Конфиг…", "Вкладки…", "Готово" },
-    },
-    KeySystem = {
-        Title = "My Hub",
-        URL   = "https://example.com/key",
-        Key   = { "ABC-123" },
-        SaveKey = true,
-    },
-})
+local WindUI = loadstring(game:HttpGet(".../dist/main.lua"))()
+print(WindUI:GetLanguage())         --> "en"
+
+WindUI:SetLanguage("ru")            --> весь интерфейс на русском
+WindUI:SetLanguage("eng")           --> обратно на английский
+
+-- или при создании окна:
+WindUI:CreateWindow({ Language = "ru", ... })
 ```
 
-`Loading = false` (по умолчанию) не создаёт вообще ни одного GUI и не вешает соединений. `WindUI:SetLoadingEnabled(bool)` и `Panel:SetValue("ReworkLoading", bool)` переключают оверлей на лету.
+Принимаются алиасы: `ru`, `rus`, `russian`, `ru-ru` → RU; `en`, `eng`, `english`, `en-us`, `en-gb` → ENG. Перевод обновляет уже созданные подписи (включая заголовки секций панели, Key System и экран загрузки). `WindUI:OnLanguageChange(fn)` подписывается на смену языка.
 
-Смена языка/темы из кода (`WindUI:SetLanguage`, `WindUI:SetTheme`) **синхронизирует строки в панели** — они больше не показывают устаревшее значение. `Panel:GetSection("Комбат")` и `Panel:GetSection("Combat")` работают при любом выбранном языке.
+### Темы: как в оригинальном WindUI
 
-**Key System** теперь всегда имеет две нижние кнопки — **Get Key** и **Check Key** (плюс «Выход»), локализованные вместе с интерфейсом. Закрытие диалога больше не оставляет скрипт в бесконечном `repeat task.wait()` (таймаут 5 минут по времени, не по кадрам), все соединения диалога отключаются при завершении, а неверный ключ показывает уведомление вместо молчания.
+Тема выбирается из кода — `Theme = "Rose"` в `CreateWindow` или `WindUI:SetTheme("Rose")`. Доступны **все темы оригинала**:
 
-Минимальный вариант с тестовым ключом `test` (полностью — в `examples/rework_example.client.lua`):
+```
+Dark, Light, Rose, Plant, Red, Indigo, Sky, Violet, Amber,
+Emerald, Midnight, Crimson, MonokaiPro, CottonCandy, Mellowsi, Rainbow
+```
 
 ```lua
-local Window = WindUI:CreateWindow({
-    Title = "My Hub",
-    Folder = "MyHub",
+WindUI:SetTheme("Midnight")
+print(WindUI:GetCurrentTheme())     --> "Midnight"
+print(WindUI:GetThemes())           --> таблица всех тем
+
+WindUI:SetTheme("Monokai Pro")      -- можно и по красивому имени Theme.Name
+WindUI:AddTheme({ Name = "MyTheme", ... })  -- свои темы тоже работают
+WindUI:OnThemeChange(function(name) print(name) end)
+```
+
+### Загрузка (опционально)
+
+```lua
+WindUI:CreateWindow({
+    Loading = false,                       -- по умолчанию, GUI не создаётся
+    -- Loading = true,                     -- или:
+    -- Loading = { Enabled = true, Duration = 1.2, Title = "My Hub",
+    --             Steps = { "Конфиг…", "Вкладки…", "Готово" } },
     KeySystem = {
-        Title = "My Hub · Key System",
-        Note  = "Тестовый ключ: <b>test</b>",
+        Title = "My Hub",
         Key   = { "test" },   -- рабочий ключ
         SaveKey = false,      -- спрашивать при каждом запуске
     },
 })
-if not Window then return end -- ключ не ввели / «Выход»
 ```
+
+`WindUI:SetLoadingEnabled(bool)` переключает оверлей на лету. Key System имеет нижние кнопки **Get Key** / **Check Key** (и «Выход»), локализованные вместе с интерфейсом; неверный ключ показывает уведомление, а ожидание ввода ограничено 5 минутами.
+
+`Panel:GetSection("Комбат")` и `Panel:GetSection("Combat")` работают при любом языке. Полный пример — `examples/rework_example.client.lua`.
 
 ---
 
@@ -411,7 +413,7 @@ print(Window.ConfigManager:AllConfigs())
 |---|---|
 | `WindUI:CreateWindow(config)` | Создать окно (только одно) |
 | `WindUI:SetTheme(name)` / `:GetThemes()` / `:GetCurrentTheme()` | Темы: Dark, Light, Rose, … |
-| `WindUI:SetFont(id)` / `:Localization(cfg)` / `:SetLanguage(code)` / `:GetLanguage()` / `:OnLanguageChange(fn)` | Шрифт и локализация RU/ENG (`ru`, `eng`, `en`, `english`, `rus`) |
+| `WindUI:SetFont(id)` / `:Localization(cfg)` / `:SetLanguage(code)` / `:GetLanguage()` / `:OnLanguageChange(fn)` | Шрифт и локализация RU/ENG, **по умолчанию ENG** (`ru`, `eng`, `en`, `english`, `rus`) |
 | `WindUI:SetTheme(name)` / `:GetThemes()` / `:GetCurrentTheme()` / `:OnThemeChange(fn)` | Тема: возвращает ключ, `OnThemeChange` поддерживаетหลาย подписчиков |
 | `WindUI:SetLoadingEnabled(bool)` / `:SetDisplayOrder(name, value)` | Экран загрузки и порядок ScreenGui |
 | `WindUI:Notify(cfg)` / `:Popup(cfg)` / `:Gradient(stops)` | Уведомления, попапы, градиенты |
@@ -430,10 +432,9 @@ print(Window.ConfigManager:AllConfigs())
 | `:SetToggleKey(key)`, `:SetOpenButtonEnabled(bool)`, `:SetOpenButtonVisible(bool)`, `:EditOpenButton(cfg)` | Управление кнопкой |
 | `:Profile(cfg)` | Панель профиля (синглтон на окно) |
 | `Window.OpenButtonMain:SetOpenState(closed)` / `:IsWindowOpen()` / `:Refresh()` / `:RefreshTitle()` | Явное состояние и локализованная подпись кнопки |
-| `Window.Settings`, `Window.LoadingScreen` | Настройки и оверлей загрузки |
+| `Window.LoadingScreen` | Оверлей загрузки (из кода) |
 | `Window.ProfilePanel:GetSection(name)` | Поиск секции по RU или EN имени ("Комбат" / "Combat") |
-| `Window.ProfilePanel:SetLanguage("eng")` / `:SetTheme("Rose")` | То же, что клик по строкам в панели |
-| `Panel:GetItem("ReworkTheme").Options` | Актуальный список всех тем WindUI |
+| `Window.ProfilePanel:SetLanguage("eng")` / `:SetTheme("Rose")` | Прокси к `WindUI:SetLanguage` / `WindUI:SetTheme` |
 | `:SetTitle`, `:SetAuthor`, `:SetIconSize`, `:SetSize`, `:SetUIScale`, `:SetToTheCenter`, `:ToggleFullscreen` | Окно |
 | `:ToggleTransparency`, `:LockAll`, `:UnlockAll`, `:GetLocked`, `:GetUnlocked` | Прочее |
 | `:SetAnimationProfile(name)`, `:SetAnimationsEnabled(bool)` | Прокси к `WindUI` |
@@ -508,7 +509,7 @@ windUIrework/
 │   ├── components/window/
 │   │   ├── Init.lua                ← платформа, open/close, Profile API
 │   │   ├── Openbutton.lua          ← ПЕРЕПИСАН
-│   │   ├── ProfilePanel.lua        ← НОВЫЙ (+ секция «Настройки»)
+│   │   ├── ProfilePanel.lua        ← НОВЫЙ (только Комбат / Визуалы)
 │   │   └── LoadingScreen.lua       ← НОВЫЙ (оверлей загрузки)
 │   ├── components/… , elements/… , themes/… , utils/…
 │   ├── config/Init.lua             ← ConfigManager (фиксы 0)
