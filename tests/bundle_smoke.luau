@@ -468,22 +468,12 @@ local created, Window = pcall(function()
 		Folder = "SmokeTest",
 		Size = UDim2.fromOffset(620, 470),
 		ToggleKey = "RightShift",
-		User = { Enabled = true },
+		-- Same shape as the shipped test script: NO Profile config and the
+		-- user card disabled, so no account panel is auto-created.
+		User = { Enabled = false },
 		OpenButton = { Enabled = true, Draggable = true },
 		Loading = { Enabled = true, Duration = 0.25 },
 		Theme = "Dark",
-		Profile = {
-			Config = "default",
-			Sections = {
-				{ Title = "Комбат", Items = {
-					{ Title = "Аимбот", Flag = "Aimbot", Default = false },
-					{ Title = "Kill All", Type = "Button", Callback = function() end },
-				} },
-				{ Title = "Визуалы", Items = {
-					{ Title = "ESP", Flag = "ESP", Default = true },
-				} },
-			},
-		},
 	})
 end)
 if not created or type(Window) ~= "table" then
@@ -494,6 +484,10 @@ if Window.IsMobile ~= false or Window.IsPC ~= true then
 end
 if not Window.OpenButtonMain then
 	error("OpenButtonMain is missing", 0)
+end
+-- The test script must NOT create the Combat/Visuals account panel.
+if Window.ProfilePanel ~= nil then
+	error("account panel was auto-created without a Profile config", 0)
 end
 
 -- Tab + zero-safe slider
@@ -530,10 +524,21 @@ if ZeroRange:GetValue() ~= 0 or ZeroRange.Value.Max <= ZeroRange.Value.Min then
 	error("slider with Min = 0, Max = 0, Step = 0 is broken", 0)
 end
 
--- Profile panel (Neverlose-style, bottom-left)
-local Panel = Window.ProfilePanel
+-- Profile panel is OPT-IN: build it explicitly to test the module.
+local Panel = Window:Profile({
+	Config = "default",
+	Sections = {
+		{ Title = "Комбат", Items = {
+			{ Title = "Аимбот", Flag = "Aimbot", Default = false },
+			{ Title = "Kill All", Type = "Button", Callback = function() end },
+		} },
+		{ Title = "Визуалы", Items = {
+			{ Title = "ESP", Flag = "ESP", Default = true },
+		} },
+	},
+})
 if not Panel then
-	error("Profile panel was not created from CreateWindow{ Profile = ... }", 0)
+	error("Window:Profile() did not create the panel", 0)
 end
 if Panel:GetValue("ESP") ~= true then
 	error("profile default value is wrong", 0)
@@ -705,6 +710,6 @@ if #WindUI.Creator.Signals ~= 0 then
 end
 
 print(string.format(
-	"bundle_smoke: OK (WindUI v%s | window, zero sliders, Combat/Visuals panel, ENG default, open button hidden while menu is open, guards)",
+	"bundle_smoke: OK (WindUI v%s | no auto account panel, opt-in Combat/Visuals panel, zero sliders, ENG default, open button hidden while menu is open, guards)",
 	tostring(WindUI.Version)
 ))

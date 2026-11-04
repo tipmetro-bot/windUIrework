@@ -53,8 +53,9 @@ local WindUI = loadstring(game:HttpGet(
 ))()
 ```
 
-> Бандл берётся из `main`. Готовый скрипт с Key System (ключ `test`) лежит
-> в `examples/rework_example.client.lua`.
+> Бандл берётся из `main`. **Тестовый скрипт** — `examples/rework_example.client.lua`:
+> ключ `test`, одна вкладка со слайдером, без панели аккаунта и без
+> «Комбат»/«Визуалы».
 > Файл `dist/main.lua` — это готовый бандл всех модулей из `src/` (включая иконки), возвращает таблицу `WindUI`.
 
 ### Вариант 2 — Rojo / Studio
@@ -82,23 +83,23 @@ local Window = WindUI:CreateWindow({
     Title = "WindUI Rework",
     Folder = "MyHub",                    -- включает сохранение конфигов
     ToggleKey = "RightShift",           -- ПК
-    User = { Enabled = true },          -- карточка профиля внизу слева
+    User = { Enabled = false },         -- панели аккаунта нет
     OpenButton = { Enabled = true, Draggable = true },   -- скрыта, пока меню открыто
-    Profile = { Config = "default", AutoLoad = true },  -- панель профиля
+    KeySystem = { Key = { "test" }, SaveKey = false },
 })
 
 local Tab = Window:Tab({ Title = "Комбат", Icon = "crosshair" })
 
 Tab:Slider({
-    Title = "FOV",
-    Value = { Min = 0, Max = 180, Default = 0 },   -- 0 работает
+    Title = "Test Slider",
+    Value = { Min = 0, Max = 100, Default = 0 },   -- 0 работает
     Step = 1,
-    Flag = "FOV",
+    Flag = "TestSlider",
     Callback = function(v) print(v) end,
 })
 ```
 
-Полный рабочий пример со всеми фичами: **[`examples/rework_example.client.lua`](examples/rework_example.client.lua)**.
+**Тестовый скрипт:** [`examples/rework_example.client.lua`](examples/rework_example.client.lua) — ключ `test`, вкладка со слайдером, **никаких** «Комбат» / «Визуалы» и никакой панели аккаунта.
 
 ---
 
@@ -234,7 +235,9 @@ pulse:Stop()
 
 ---
 
-## Панель профиля (Neverlose‑style)
+## Панель профиля (Neverlose‑style, опционально)
+
+> В тестовом скрипте эта панель **не используется**. Подключается только явным `Window:Profile{...}` / `Profile = {...}` в `CreateWindow`.
 
 Находится **в нижнем левом углу окна**, прямо над карточкой профиля и слегка её перекрывает (`Overlap`, по умолчанию 16 px). Открывается кликом по аватару/имени в сайдбаре, закрывается кнопкой `×`, кликом вне панели или `Escape`. Секции сворачиваются по клику на заголовок. Все элементы рассчитаны на тач (строки 34+ px, `Activated`, `TouchTap`).
 
@@ -381,7 +384,8 @@ WindUI:CreateWindow({
 
 `WindUI:SetLoadingEnabled(bool)` переключает оверлей на лету. Key System имеет нижние кнопки **Get Key** / **Check Key** (и «Выход»), локализованные вместе с интерфейсом; неверный ключ показывает уведомление, а ожидание ввода ограничено 5 минутами.
 
-`Panel:GetSection("Комбат")` и `Panel:GetSection("Combat")` работают при любом языке. Полный пример — `examples/rework_example.client.lua`.
+`Panel:GetSection("Комбат")` и `Panel:GetSection("Combat")` работают при любом языке.
+Панель аккаунта — **опциональная** фича библиотеки (`Window:Profile{...}`); в тестовом скрипте `examples/rework_example.client.lua` она **не используется**, там только вкладка со слайдером.
 
 ---
 
@@ -495,7 +499,7 @@ windUIrework/
 │   └── main.lua                    ← ГОТОВЫЙ БАНДЛ для loadstring()
 ├── docs/                           ← баннеры/скриншоты оригинала
 ├── examples/
-│   └── rework_example.client.lua   ← полный пример всех фич
+│   └── rework_example.client.lua   ← тест: ключ test + слайдер, без панели
 ├── tools/
 │   ├── bundle.py                   ← сборщик одного файла
 │   ├── check_syntax.mjs            ← проверка синтаксиса Luau

@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "tests" / "bundle_smoke.luau"
 BUNDLE = ROOT / "dist" / "main.lua"
 MATH_TEST = ROOT / "tests" / "slider_math_test.luau"
+EXAMPLE = ROOT / "examples" / "rework_example.client.lua"
 MARKER = "-- __WINDUI_BUNDLE__"
 
 
@@ -49,12 +50,37 @@ def run(argv: list[str], label: str, expected: str) -> bool:
     return True
 
 
+def check_example() -> bool:
+    """Regression guard for the *test script* the user actually pastes into
+    an executor: it must contain a slider and must NOT contain the
+    Combat/Visuals account panel or a settings section."""
+    text = EXAMPLE.read_text(encoding="utf-8")
+    problems = []
+    if ":Slider(" not in text:
+        problems.append("no slider in the test script")
+    if 'Profile = {' in text or "Title = \"Комбат\"" in text or "Title = \"Визуалы\"" in text:
+        problems.append("Combat/Visuals account panel is still in the test script")
+    if "Window.ProfilePanel" in text or ":AddSettings(" in text:
+        problems.append("account-panel settings leaked into the test script")
+    if 'Key = { "test" }' not in text:
+        problems.append("Key System key 'test' is missing")
+    if "StayVisible" in text:
+        problems.append("deprecated StayVisible is still used in the test script")
+    if problems:
+        for problem in problems:
+            print(f"[smoke] test script: {problem}")
+        return False
+    print("[smoke] test script (slider + no account panel + key test): OK")
+    return True
+
+
 def main() -> int:
+    example_ok = check_example()
     luau = find_luau()
     if not luau:
         print("[smoke] SKIPPED: Luau CLI not found (set LUAU_BIN or install luau).")
         print("[smoke] CI still runs `npm run check` (parser + bundle freshness).")
-        return 0
+        return 0 if example_ok else 1
 
     template = TEMPLATE.read_text(encoding="utf-8")
     bundle = BUNDLE.read_text(encoding="utf-8")
@@ -69,6 +95,7 @@ def main() -> int:
         ok = run([luau, str(generated)], "bundle loads with Roblox mocks", "bundle_smoke: OK")
         ok = run([luau, str(MATH_TEST)], "zero-safe slider math", "ALL OK") and ok
 
+    ok = example_ok and ok
     if not ok:
         print("[smoke] FAILED", file=sys.stderr)
         return 1
