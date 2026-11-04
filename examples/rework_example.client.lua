@@ -1,12 +1,13 @@
 --[[
-    WindUI Rework — готовый скрипт с Key System
+    WindUI Rework — ТЕСТОВЫЙ СКРИПТ
     ------------------------------------------------------------------
-    Вставьте в executor (или в StarterPlayerScripts при разработке
-    через Rojo). КЛЮЧ ДЛЯ ВХОДА: test
+    Вставьте в executor. КЛЮЧ ДЛЯ ВХОДА: test
 
-    • бандл грузится из main: .../refs/heads/main/dist/main.lua
-    • внизу диалога три кнопки: «Выход», «Get Key», «Check Key»
-    • если ключ не ввели или нажали «Выход», CreateWindow вернёт nil
+    • бандл: .../refs/heads/main/dist/main.lua
+    • язык RU/ENG (по умолчанию ENG) и темы задаются ИЗ КОДА
+    • панели аккаунта нет: НИКАКИХ «Комбат» / «Визуалы» / «Настроек»
+    • 2 вкладки, внутри — боксовые категории со слайдерами
+    • кнопка открытия появляется только когда меню закрыто
 ]]
 
 local WindUI = loadstring(game:HttpGet(
@@ -17,141 +18,184 @@ WindUI:SetAnimationProfile("Smooth") -- Smooth | Snappy | Calm | Reduced | None
 WindUI.TransparencyValue = 0.18
 
 ----------------------------------------------------------------------
--- Язык и темы настраиваются ТОЛЬКО из кода, как в оригинальном WindUI
+-- Язык и тема — из кода, как в оригинальном WindUI
 ----------------------------------------------------------------------
--- Язык: RU / ENG, по умолчанию ENG (ничего писать не нужно).
--- WindUI:SetLanguage("ru")   -- переключить на русский
--- WindUI:SetLanguage("eng")  -- либо "en", "english", "rus", "russian"
---
--- Тема: любая тема оригинального WindUI задаётся из кода:
---   Dark, Light, Rose, Plant, Red, Indigo, Sky, Violet, Amber,
---   Emerald, Midnight, Crimson, MonokaiPro, CottonCandy,
---   Mellowsi, Rainbow
--- WindUI:SetTheme("Rose")    -- или Theme = "Rose" в CreateWindow
+-- Язык по умолчанию ENG. Раскомментируйте для русского:
+-- WindUI:SetLanguage("ru")          -- или CreateWindow{ Language = "ru" }
 WindUI:SetTheme("Dark")
-print("Темы:", WindUI:GetThemes(), "| текущая:", WindUI:GetCurrentTheme())
 
 ----------------------------------------------------------------------
--- Окно + Key System
+-- Окно + Key System (ключ test)
 ----------------------------------------------------------------------
 local Window = WindUI:CreateWindow({
-	Title = "WindUI Rework",
+	Title = "Test",
 	Author = "by tipmetro-bot",
-	Folder = "WindUIRework",             -- папка для конфигов и .key файла
-	Icon = "rbxassetid://111665032676235",
-	Size = UDim2.fromOffset(620, 470),
+	Folder = "WindUIReworkTest",
+	Size = UDim2.fromOffset(600, 450),
 	Transparent = true,
 	Acrylic = false,
 	NewElements = true,
-	ToggleKey = "RightShift",            -- строка, Enum.KeyCode или список
+	ToggleKey = "RightShift",
 
-	-- Язык по умолчанию ENG. Раскомментируйте, чтобы стартовать с RU:
-	-- Language = "ru",
-	Theme = "Dark",                      -- тема из кода, как в оригинале
-	Loading = false,                     -- true или { Enabled = true, Duration = 1.2 }
+	Theme = "Dark",
+	-- Language = "ru",               -- по умолчанию ENG
+	Loading = false,                 -- true / { Enabled = true, Duration = 1.2 }
 
-	-- Панель аккаунта содержит ТОЛЬКО списки «Комбат» и «Визуалы».
-	-- Никакой секции «Настройки» в ней нет.
-
-	-- ▼▼▼ KEY SYSTEM: единственный рабочий ключ — test ▼▼▼
 	KeySystem = {
-		Title = "WindUI Rework · Key System",
-		Note = "Тестовый ключ: <b>test</b>",  -- RichText, видно в диалоге
-		Key = { "test" },                     -- список допустимых ключей
-		SaveKey = false,                      -- false = спрашивать при каждом запуске
-		-- URL = "https://...",               -- ссылка для кнопки «Get Key»
-		-- API = { ... },                     -- внешний сервис вместо Key
-		-- KeyValidator = function(key) return key == "test" end,
+		Title = "Test · Key System",
+		Note = "Ключ: <b>test</b>",
+		Key = { "test" },             -- единственный рабочий ключ
+		SaveKey = false,              -- спрашивать при каждом запуске
 	},
 
-	-- Профиль в нижнем левом углу сайдбара
-	User = { Enabled = true, Anonymous = false },
+	-- Карточки профиля и панели аккаунта НЕТ.
+	User = { Enabled = false },
 
-	-- Кнопка открытия меню: ПК, телефон и геймпад.
-	-- Пока меню ОТКРЫТО кнопки нет вообще. Как только меню закрыли /
-	-- скрыли — кнопка сразу появляется и открывает его обратно.
+	-- Кнопка есть только у закрытого меню.
 	OpenButton = {
 		Enabled = true,
 		OnlyMobile = false,
 		Draggable = true,
-		-- Title = "Открыть UI",  -- без Title подпись локализуется: Open / Открыть
-		CornerRadius = UDim.new(1, 0),
-		Color = ColorSequence.new(Color3.fromHex("40c9ff"), Color3.fromHex("e81cff")),
-	},
-
-	-- Neverlose-подобная панель поверх профиля
-	Profile = {
-		Config = "default",
-		AutoLoad = true,
-		Overlap = 16,
-		Sections = {
-			{ Title = "Комбат", Items = {
-				{ Title = "Сайлент аим", Flag = "SilentAim", Default = false },
-				{ Title = "Аимбот", Flag = "Aimbot", Default = false },
-				{ Title = "Триггербот", Flag = "TriggerBot", Default = false },
-				{ Title = "Kill All", Flag = "KillAll", Type = "Button",
-					Callback = function() print("Kill All!") end },
-			} },
-			{ Title = "Визуалы", Items = {
-				{ Title = "ESP", Flag = "ESP", Default = true },
-				{ Title = "ESP Box", Flag = "ESPBox", Default = false },
-				{ Title = "ESP Skeleton", Flag = "ESPSkeleton", Default = false },
-			} },
-		},
 	},
 })
 
--- Ключ не ввели / нажали «Выход» / вышло время ожидания → выходим.
+-- Ключ не ввели / «Выход» → выходим.
 if not Window then
 	return
 end
 
 ----------------------------------------------------------------------
--- ConfigManager: флаги сохраняются в файл конфига
+-- ВКЛАДКА 1 · Главная: категории со слайдерами
 ----------------------------------------------------------------------
-local Config = Window.ConfigManager and Window.ConfigManager:Config("default", true)
-if Config then
-	Config:SetAsCurrent()
-end
+local Main = Window:Tab({ Title = "Главная", Icon = "settings" })
 
-----------------------------------------------------------------------
--- Вкладки
-----------------------------------------------------------------------
-local Combat = Window:Tab({ Title = "Комбат", Icon = "crosshair" })
-Combat:Section({ Title = "Aim" })
-Combat:Toggle({ Title = "Сайлент аим", Flag = "SilentAim", Default = false,
-	Callback = function(v) print("Сайлент аим:", v) end })
-
--- Слайдер с нулями: раньше Min/Default = 0 молча пропускались
-local FOV = Combat:Slider({
-	Title = "FOV (Min = 0, Default = 0)",
-	Flag = "AimFOV",
-	Value = { Min = 0, Max = 180, Default = 0 },
-	Step = 1,
-	Callback = function(v) print("FOV:", v) end,
+local SliderCategory = Main:Section({
+	Title = "Слайдеры",
+	Desc = "От 0 до 100, ноль работает",
+	Icon = "sliders-horizontal",
+	Box = true,
+	BoxBorder = true,
+	Opened = true,
 })
-Combat:Button({ Title = "Сбросить FOV в 0", Callback = function() FOV:Set(0) end })
-Combat:Slider({ Title = "Max = 0 / Step = 0", Value = { Min = 0, Max = 0, Default = 0 },
-	Step = 0, Callback = function() end })
 
-local Visuals = Window:Tab({ Title = "Визуалы", Icon = "eye" })
-Visuals:Section({ Title = "ESP" })
-Visuals:Toggle({ Title = "ESP", Flag = "ESP", Default = true, Callback = function() end })
-Visuals:Toggle({ Title = "ESP Box", Flag = "ESPBox", Default = false, Callback = function() end })
-Visuals:Toggle({ Title = "ESP Skeleton", Flag = "ESPSkeleton", Default = false, Callback = function() end })
+local TestSlider = SliderCategory:Slider({
+	Title = "Test Slider",
+	Value = { Min = 0, Max = 100, Default = 0 },
+	Step = 1,
+	Flag = "TestSlider",
+	Callback = function(value)
+		print("[TestSlider]", value)
+	end,
+})
+
+SliderCategory:Slider({
+	Title = "Точность 0.00 → 1.00",
+	Desc = "Дробный шаг",
+	Value = { Min = 0, Max = 1, Default = 0 },
+	Step = 0.05,
+	Flag = "Precision",
+	Callback = function(value)
+		print("[Precision]", value)
+	end,
+})
+
+local EdgeCategory = Main:Section({
+	Title = "Граничные случаи",
+	Desc = "Проверка бага с нулём",
+	Icon = "circle-alert",
+	Box = true,
+	Opened = true,
+})
+
+EdgeCategory:Slider({
+	Title = "Min = Max = 0",
+	Value = { Min = 0, Max = 0, Default = 0 },
+	Step = 1,
+})
+
+EdgeCategory:Slider({
+	Title = "Отрицательный диапазон",
+	Value = { Min = -50, Max = 50, Default = 0 },
+	Step = 1,
+})
+
+local ActionsCategory = Main:Section({
+	Title = "Действия",
+	Icon = "rotate-ccw",
+	Box = true,
+	Opened = true,
+})
+
+ActionsCategory:Button({
+	Title = "Сбросить слайдер в 0",
+	Callback = function()
+		TestSlider:Set(0)
+		print("Текущее значение:", TestSlider:GetValue())
+	end,
+})
 
 ----------------------------------------------------------------------
--- Панель профиля из кода + уведомление
+-- ВКЛАДКА 2 · Оформление
 ----------------------------------------------------------------------
-local Panel = Window.ProfilePanel
-if Panel then
-	Panel:SetValue("ESP", true)
-	Panel:SaveConfig()
-end
+local Style = Window:Tab({ Title = "Оформление", Icon = "palette" })
+
+local ThemeCategory = Style:Section({
+	Title = "Тема",
+	Desc = "16 тем, как в оригинальном WindUI",
+	Icon = "palette",
+	Box = true,
+	Opened = true,
+})
+
+ThemeCategory:Dropdown({
+	Title = "Theme",
+	Values = {
+		"Dark", "Light", "Rose", "Plant", "Red", "Indigo", "Sky", "Violet",
+		"Amber", "Emerald", "Midnight", "Crimson", "MonokaiPro",
+		"CottonCandy", "Mellowsi", "Rainbow",
+	},
+	Value = "Dark",
+	Callback = function(value)
+		WindUI:SetTheme(value)
+	end,
+})
+
+local LangCategory = Style:Section({
+	Title = "Язык",
+	Desc = "По умолчанию ENG",
+	Icon = "languages",
+	Box = true,
+	Opened = true,
+})
+
+LangCategory:Dropdown({
+	Title = "Language",
+	Values = { "eng", "ru" },
+	Value = "eng",
+	Callback = function(value)
+		WindUI:SetLanguage(value)
+	end,
+})
+
+local AnimCategory = Style:Section({
+	Title = "Анимации",
+	Icon = "sparkles",
+	Box = true,
+	Opened = true,
+})
+
+AnimCategory:Dropdown({
+	Title = "Profile",
+	Values = { "Smooth", "Snappy", "Calm", "Reduced", "None" },
+	Value = "Smooth",
+	Callback = function(value)
+		WindUI:SetAnimationProfile(value)
+	end,
+})
 
 WindUI:Notify({
-	Title = "WindUI Rework",
-	Content = "Ключ принят · ПК + телефон · слайдеры с 0 · панель профиля",
-	Icon = "sparkles",
-	Duration = 6,
+	Title = "Test",
+	Content = "Ключ test принят · 2 вкладки с категориями",
+	Icon = "settings",
+	Duration = 5,
 })

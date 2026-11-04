@@ -27,6 +27,8 @@ ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "tests" / "bundle_smoke.luau"
 BUNDLE = ROOT / "dist" / "main.lua"
 MATH_TEST = ROOT / "tests" / "slider_math_test.luau"
+EXAMPLE = ROOT / "examples" / "rework_example.client.lua"
+NIGHT_EXAMPLE = ROOT / "examples" / "nighttime_example.client.lua"
 MARKER = "-- __WINDUI_BUNDLE__"
 
 
@@ -49,12 +51,49 @@ def run(argv: list[str], label: str, expected: str) -> bool:
     return True
 
 
+def check_example() -> bool:
+    """Regression guard for the *test scripts* users paste into executors:
+    they must have tabs with boxed categories, a slider, no Combat/Visuals
+    account panel, and (for the main example) the Key System key `test`."""
+    ok = True
+    for path in (EXAMPLE, NIGHT_EXAMPLE):
+        text = path.read_text(encoding="utf-8")
+        problems = []
+        if text.count(":Tab(") < 2:
+            problems.append("fewer than 2 tabs")
+        if ":Section(" not in text or "Box = true" not in text:
+            problems.append("no boxed categories (Section{ Box = true })")
+        if ":Slider(" not in text:
+            problems.append("no slider")
+        if 'Profile = {' in text or "Title = \"Комбат\"" in text or "Title = \"Визуалы\"" in text:
+            problems.append("Combat/Visuals account panel is still present")
+        if "Window.ProfilePanel" in text or ":AddSettings(" in text:
+            problems.append("account-panel settings leaked into the script")
+        if "StayVisible" in text:
+            problems.append("deprecated StayVisible is still used")
+        if path == EXAMPLE and 'Key = { "test" }' not in text:
+            problems.append("Key System key 'test' is missing")
+        if path == NIGHT_EXAMPLE and "KeySystem" in text:
+            problems.append("Key System must stay out of the Nighttime example")
+        if problems:
+            ok = False
+            for problem in problems:
+                print(f"[smoke] {path.name}: {problem}")
+        else:
+            print(f"[smoke] {path.name}: OK (tabs + categories + slider + no panel)")
+
+    if not ok:
+        return False
+    print("[smoke] test scripts (tabs, categories, sliders, no account panel): OK")
+    return True
+
 def main() -> int:
+    example_ok = check_example()
     luau = find_luau()
     if not luau:
         print("[smoke] SKIPPED: Luau CLI not found (set LUAU_BIN or install luau).")
         print("[smoke] CI still runs `npm run check` (parser + bundle freshness).")
-        return 0
+        return 0 if example_ok else 1
 
     template = TEMPLATE.read_text(encoding="utf-8")
     bundle = BUNDLE.read_text(encoding="utf-8")
@@ -69,6 +108,7 @@ def main() -> int:
         ok = run([luau, str(generated)], "bundle loads with Roblox mocks", "bundle_smoke: OK")
         ok = run([luau, str(MATH_TEST)], "zero-safe slider math", "ALL OK") and ok
 
+    ok = example_ok and ok
     if not ok:
         print("[smoke] FAILED", file=sys.stderr)
         return 1
