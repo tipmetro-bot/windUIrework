@@ -28,6 +28,7 @@ TEMPLATE = ROOT / "tests" / "bundle_smoke.luau"
 BUNDLE = ROOT / "dist" / "main.lua"
 MATH_TEST = ROOT / "tests" / "slider_math_test.luau"
 EXAMPLE = ROOT / "examples" / "rework_example.client.lua"
+NIGHT_EXAMPLE = ROOT / "examples" / "nighttime_example.client.lua"
 MARKER = "-- __WINDUI_BUNDLE__"
 
 
@@ -51,28 +52,40 @@ def run(argv: list[str], label: str, expected: str) -> bool:
 
 
 def check_example() -> bool:
-    """Regression guard for the *test script* the user actually pastes into
-    an executor: it must contain a slider and must NOT contain the
-    Combat/Visuals account panel or a settings section."""
-    text = EXAMPLE.read_text(encoding="utf-8")
-    problems = []
-    if ":Slider(" not in text:
-        problems.append("no slider in the test script")
-    if 'Profile = {' in text or "Title = \"Комбат\"" in text or "Title = \"Визуалы\"" in text:
-        problems.append("Combat/Visuals account panel is still in the test script")
-    if "Window.ProfilePanel" in text or ":AddSettings(" in text:
-        problems.append("account-panel settings leaked into the test script")
-    if 'Key = { "test" }' not in text:
-        problems.append("Key System key 'test' is missing")
-    if "StayVisible" in text:
-        problems.append("deprecated StayVisible is still used in the test script")
-    if problems:
-        for problem in problems:
-            print(f"[smoke] test script: {problem}")
-        return False
-    print("[smoke] test script (slider + no account panel + key test): OK")
-    return True
+    """Regression guard for the *test scripts* users paste into executors:
+    they must have tabs with boxed categories, a slider, no Combat/Visuals
+    account panel, and (for the main example) the Key System key `test`."""
+    ok = True
+    for path in (EXAMPLE, NIGHT_EXAMPLE):
+        text = path.read_text(encoding="utf-8")
+        problems = []
+        if text.count(":Tab(") < 2:
+            problems.append("fewer than 2 tabs")
+        if ":Section(" not in text or "Box = true" not in text:
+            problems.append("no boxed categories (Section{ Box = true })")
+        if ":Slider(" not in text:
+            problems.append("no slider")
+        if 'Profile = {' in text or "Title = \"Комбат\"" in text or "Title = \"Визуалы\"" in text:
+            problems.append("Combat/Visuals account panel is still present")
+        if "Window.ProfilePanel" in text or ":AddSettings(" in text:
+            problems.append("account-panel settings leaked into the script")
+        if "StayVisible" in text:
+            problems.append("deprecated StayVisible is still used")
+        if path == EXAMPLE and 'Key = { "test" }' not in text:
+            problems.append("Key System key 'test' is missing")
+        if path == NIGHT_EXAMPLE and "KeySystem" in text:
+            problems.append("Key System must stay out of the Nighttime example")
+        if problems:
+            ok = False
+            for problem in problems:
+                print(f"[smoke] {path.name}: {problem}")
+        else:
+            print(f"[smoke] {path.name}: OK (tabs + categories + slider + no panel)")
 
+    if not ok:
+        return False
+    print("[smoke] test scripts (tabs, categories, sliders, no account panel): OK")
+    return True
 
 def main() -> int:
     example_ok = check_example()

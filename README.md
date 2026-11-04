@@ -54,8 +54,10 @@ local WindUI = loadstring(game:HttpGet(
 ```
 
 > Бандл берётся из `main`. **Тестовый скрипт** — `examples/rework_example.client.lua`:
-> ключ `test`, одна вкладка со слайдером, без панели аккаунта и без
-> «Комбат»/«Визуалы».
+> ключ `test`, 2 вкладки с боксовыми категориями и слайдерами, без панели
+> аккаунта и без «Комбат»/«Визуалы». Второй пример —
+> `examples/nighttime_example.client.lua`: 3 вкладки (Nighttime / Слайдеры /
+> Оформление), без ключ-системы.
 > Файл `dist/main.lua` — это готовый бандл всех модулей из `src/` (включая иконки), возвращает таблицу `WindUI`.
 
 ### Вариант 2 — Rojo / Studio
@@ -88,9 +90,15 @@ local Window = WindUI:CreateWindow({
     KeySystem = { Key = { "test" }, SaveKey = false },
 })
 
-local Tab = Window:Tab({ Title = "Комбат", Icon = "crosshair" })
+local Tab = Window:Tab({ Title = "Главная", Icon = "settings" })
 
-Tab:Slider({
+-- Категория (бокс со сворачиванием) внутри вкладки
+local Category = Tab:Section({
+    Title = "Слайдеры", Icon = "sliders-horizontal",
+    Box = true, BoxBorder = true, Opened = true,
+})
+
+Category:Slider({
     Title = "Test Slider",
     Value = { Min = 0, Max = 100, Default = 0 },   -- 0 работает
     Step = 1,
@@ -99,7 +107,11 @@ Tab:Slider({
 })
 ```
 
-**Тестовый скрипт:** [`examples/rework_example.client.lua`](examples/rework_example.client.lua) — ключ `test`, вкладка со слайдером, **никаких** «Комбат» / «Визуалы» и никакой панели аккаунта.
+**Тестовые скрипты:**
+- [`examples/rework_example.client.lua`](examples/rework_example.client.lua) — ключ `test`, 2 вкладки с категориями и слайдерами.
+- [`examples/nighttime_example.client.lua`](examples/nighttime_example.client.lua) — 3 вкладки с категориями (`Nighttime`, `Слайдеры`, `Оформление`), nighttime + слайдеры, без ключ-системы.
+
+В обоих: **никаких** «Комбат» / «Визуалы» и никакой панели аккаунта. Категории — это `Tab:Section{ Box = true, Opened = true }`, элементы добавляются через `Category:Slider{...}` / `:Toggle{...}` / `:Dropdown{...}`.
 
 ---
 
@@ -499,7 +511,8 @@ windUIrework/
 │   └── main.lua                    ← ГОТОВЫЙ БАНДЛ для loadstring()
 ├── docs/                           ← баннеры/скриншоты оригинала
 ├── examples/
-│   └── rework_example.client.lua   ← тест: ключ test + слайдер, без панели
+│   ├── rework_example.client.lua    ← тест: ключ test, 2 вкладки с категориями
+│   └── nighttime_example.client.lua ← 3 вкладки с категориями, Nighttime
 ├── tools/
 │   ├── bundle.py                   ← сборщик одного файла
 │   ├── check_syntax.mjs            ← проверка синтаксиса Luau
