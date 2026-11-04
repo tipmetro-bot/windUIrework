@@ -119,7 +119,7 @@ local Translations = {
 	},
 }
 
-local CurrentLanguage = "ru"
+local CurrentLanguage = "en"
 local Subscribers = {}
 
 function Localization.Languages()
@@ -184,7 +184,7 @@ function Localization.Install(WindUI, language)
 			Enabled = true,
 			Translations = {},
 			Prefix = "loc:",
-			DefaultLanguage = "ru",
+			DefaultLanguage = "en",
 		})
 	end
 	if type(existing) ~= "table" then
@@ -200,9 +200,9 @@ function Localization.Install(WindUI, language)
 		end
 	end
 
-	CurrentLanguage = Localization.Normalise(language)
-		or Localization.Normalise(Creator.Language)
-		or "en"
+	-- Default is ENG, independent of the OS/Studio locale. RU is opt-in
+	-- via Install(WindUI, "ru"), Config.Language or WindUI:SetLanguage("ru").
+	CurrentLanguage = Localization.Normalise(language) or "en"
 	WindUI:SetLanguage(CurrentLanguage)
 	WindUI.ReworkLanguage = CurrentLanguage
 	return true

@@ -1,7 +1,7 @@
 --[[
     WindUI Rework / ProfilePanel
     ------------------------------------------------------------------
-    A Neverlose-style profile/settings popup anchored in the BOTTOM-LEFT
+    A Neverlose-style profile popup anchored in the BOTTOM-LEFT
     corner of the window, right above (and slightly overlapping) the user
     card that WindUI draws in the sidebar.
 
@@ -93,8 +93,9 @@ local function NormaliseBoolean(value, fallback)
 	return fallback == true
 end
 
--- Rework: "Choice" rows are a compact two/three-state selector used for
--- the RU/EN language switch and the Dark/Light theme switch.
+-- Generic "Choice" rows let custom panels offer a compact
+-- option selector. The built-in settings section was removed: language
+-- and themes are configured from code, like in the original WindUI.
 local function NormaliseOptions(options)
 	local result = {}
 	for _, option in ipairs(options or {}) do
@@ -119,61 +120,6 @@ local function OptionLabel(option, language)
 		return Localization.Get(option.LabelKey, language)
 	end
 	return tostring(option.Label ~= nil and option.Label or option.Value)
-end
-
---- WindUI ships many themes (Dark, Light, Rose, Plant, Red, Indigo, Sky,
---- Violet, Amber, Emerald, Midnight, Crimson, Monokai Pro, Cotton Candy,
---- Mellowsi, Rainbow). Build the list from the library itself instead of
---- hard-coding Dark/Light, so custom AddTheme() entries show up too.
-local function ThemeKeyOf(WindUI, value)
-	if not WindUI or not WindUI.GetThemes then
-		return value
-	end
-	local themes = WindUI:GetThemes() or {}
-	if themes[value] then
-		return value
-	end
-	for key, theme in pairs(themes) do
-		if type(theme) == "table" and (theme.Name == value or key == value) then
-			return key
-		end
-	end
-	return value
-end
-
-local function BuildThemeOptions(WindUI)
-	local options = {}
-	local themes = WindUI and WindUI.GetThemes and WindUI:GetThemes() or nil
-	if type(themes) == "table" then
-		local names = {}
-		for key, theme in pairs(themes) do
-			if type(theme) == "table" then
-				names[#names + 1] = {
-					Value = key,
-					Label = tostring(theme.Name or key),
-				}
-			end
-		end
-		table.sort(names, function(a, b)
-			-- Dark / Light first, then alphabetical.
-			local rank = { Dark = 0, Light = 1 }
-			local ra, rb = rank[a.Value] or 2, rank[b.Value] or 2
-			if ra ~= rb then
-				return ra < rb
-			end
-			return a.Label < b.Label
-		end)
-		for _, entry in ipairs(names) do
-			options[#options + 1] = entry
-		end
-	end
-	if #options == 0 then
-		options = {
-			{ Value = "Dark", LabelKey = "theme.dark" },
-			{ Value = "Light", LabelKey = "theme.light" },
-		}
-	end
-	return options
 end
 
 local function NormalizeText(value)
@@ -985,11 +931,6 @@ function ProfilePanel.New(Window, Config, WindUI)
 			end
 			if IsChoice then
 				local wanted = value
-				if Item.Flag == "ReworkLanguage" then
-					wanted = Localization.Normalise(value) or wanted
-				elseif Item.Flag == "ReworkTheme" then
-					wanted = ThemeKeyOf(WindUI, value)
-				end
 				local index
 				for i, option in ipairs(Options) do
 					if option.Value == wanted then
@@ -1238,90 +1179,6 @@ function ProfilePanel.New(Window, Config, WindUI)
 		return Section
 	end
 
-	------------------------------------------------------------------
-	-- Built-in settings (language, theme, loading, config autoload)
-	-- Everything here is clickable in the UI: no code editing required.
-	------------------------------------------------------------------
-	function self:AddSettings()
-		if self.SettingsAdded then
-			return self.SettingsSection
-		end
-		self.SettingsAdded = true
-
-		local WindUI = self.WindUI
-		local Section = self:AddSection({
-			Title = Localization.Get("settings"),
-			TitleKey = "settings",
-			Icon = "settings",
-			Expanded = true,
-		})
-
-		Section:AddItem({
-			Type = "Choice",
-			Title = Localization.Get("language"),
-			TitleKey = "language",
-			Flag = "ReworkLanguage",
-			Options = {
-				{ Value = "ru", LabelKey = "language.ru" },
-				{ Value = "en", LabelKey = "language.en" },
-			},
-			Default = Localization.GetLanguage(),
-			Callback = function(value)
-				Localization.SetLanguage(WindUI, value)
-			end,
-		})
-
-		Section:AddItem({
-			Type = "Choice",
-			Title = Localization.Get("theme"),
-			TitleKey = "theme",
-			Flag = "ReworkTheme",
-			-- Every theme shipped by WindUI (plus any AddTheme() entries).
-			Options = BuildThemeOptions(WindUI),
-			Default = ThemeKeyOf(WindUI, (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()) or "Dark"),
-			Callback = function(value)
-				if WindUI.SetTheme then
-					WindUI:SetTheme(value)
-				end
-			end,
-		})
-
-		Section:AddItem({
-			Type = "Toggle",
-			Title = Localization.Get("loading"),
-			TitleKey = "loading",
-			Flag = "ReworkLoading",
-			Default = WindUI.LoadingEnabled == true,
-			Callback = function(value)
-				if WindUI.SetLoadingEnabled then
-					WindUI:SetLoadingEnabled(value)
-				end
-				if Window.Settings then
-					Window.Settings.Loading = value
-				end
-			end,
-		})
-
-		Section:AddItem({
-			Type = "Toggle",
-			Title = Localization.Get("autoload"),
-			TitleKey = "autoload",
-			Flag = "ReworkAutoLoad",
-			Default = Config.AutoLoad ~= false,
-			Callback = function(value)
-				Config.AutoLoad = value == true
-				if self.ConfigModule and self.ConfigModule.SetAutoLoad then
-					pcall(function()
-						self.ConfigModule:SetAutoLoad(value)
-					end)
-				end
-			end,
-		})
-
-		self.SettingsSection = Section
-		return Section
-	end
-
 	function self:RefreshLanguage(language)
 		local lang = Localization.Normalise(language) or Localization.GetLanguage()
 		CloseChoicePopup()
@@ -1343,16 +1200,8 @@ function ProfilePanel.New(Window, Config, WindUI)
 				item.UIElements.Label.Text = item.Title
 			end
 			if item.Type == "Choice" then
-				local wanted = item.Value
-				if item.Flag == "ReworkLanguage" then
-					-- The row must mirror the ACTUAL library language.
-					-- WindUI:SetLanguage("ru") used to leave it on "en".
-					wanted = lang
-				elseif item.Flag == "ReworkTheme" then
-					wanted = ThemeKeyOf(self.WindUI,
-						(self.WindUI.GetCurrentTheme and self.WindUI:GetCurrentTheme()) or wanted)
-				end
-				item:Set(wanted, false)
+				-- Re-render the option label in the new language.
+				item:Set(item.Value, false)
 			end
 		end
 		return self
@@ -1363,27 +1212,6 @@ function ProfilePanel.New(Window, Config, WindUI)
 			self:RefreshLanguage(language)
 		end
 	end)
-
-	-- A theme changed from code (WindUI:SetTheme / Creator.SetTheme) must
-	-- be reflected in the panel row, and clicking the row must not recurse.
-	local function SyncTheme(value)
-		if self.Destroyed then
-			return
-		end
-		local item = self:GetItem("ReworkTheme")
-		if item then
-			item:Set(ThemeKeyOf(self.WindUI, value), false)
-		end
-	end
-
-	if WindUI and WindUI.OnThemeChange then
-		self.ThemeUnsubscribe = WindUI:OnThemeChange(SyncTheme)
-	end
-	if WindUI and WindUI.Creator and WindUI.Creator.OnThemeChange then
-		self.CreatorThemeConnection = WindUI.Creator:OnThemeChange(function(theme)
-			SyncTheme(theme and theme.Name or (WindUI.GetCurrentTheme and WindUI:GetCurrentTheme()))
-		end)
-	end
 
 	-- Public convenience API (the UI rows call these too).
 	function self:SetLanguage(language)
@@ -1572,16 +1400,6 @@ function ProfilePanel.New(Window, Config, WindUI)
 		if self.LanguageUnsubscribe then
 			pcall(self.LanguageUnsubscribe)
 			self.LanguageUnsubscribe = nil
-		end
-		if self.ThemeUnsubscribe then
-			pcall(self.ThemeUnsubscribe)
-			self.ThemeUnsubscribe = nil
-		end
-		if self.CreatorThemeConnection then
-			pcall(function()
-				self.CreatorThemeConnection:Disconnect()
-			end)
-			self.CreatorThemeConnection = nil
 		end
 		CloseChoicePopup()
 		if self.StaggerHandle then

@@ -1273,15 +1273,12 @@ return function(Config)
 		if Window.ProfilePanel then
 			return Window.ProfilePanel
 		end
+		-- The account panel contains ONLY the Combat / Visuals lists.
+		-- Language (RU/ENG, default ENG) and WindUI themes are chosen from
+		-- code (WindUI:SetLanguage / WindUI:SetTheme) like in the original
+		-- library -- there is deliberately no settings section here.
 		local Panel = ProfilePanel.New(Window, ProfileConfig or {}, Config.WindUI)
 		Window.ProfilePanel = Panel
-		-- Rework: RU/EN + Dark/Light + loading toggles live in the panel.
-		-- Set `Settings = false` in CreateWindow to hide that section.
-		if Config.Settings ~= false and Panel.AddSettings then
-			pcall(function()
-				Panel:AddSettings()
-			end)
-		end
 		return Panel
 	end
 
@@ -1505,13 +1502,8 @@ return function(Config)
 			end
 
 			if Window.OpenButtonMain and Window.IsOpenButtonEnabled then
-				-- With `StayVisible = true` the button remains on screen and
-				-- acts as an open/close toggle on PC *and* on phones.
-				if Window.OpenButtonMain.StayVisible then
-					Window.OpenButtonMain:Visible(true)
-				else
-					Window.OpenButtonMain:Visible(false)
-				end
+				-- The menu is open: the open button must be gone, always.
+				Window.OpenButtonMain:Visible(false)
 			end
 
 			--[[Config.WindUI.UIScaleObj.Scale -= 1 - 0.85
@@ -1870,9 +1862,8 @@ return function(Config)
 		Window:EditOpenButton(Window.OpenButton)
 	end
 
-	-- `Window.Profile = {...}` (or `Settings = {...}`) builds the panel.
-	local wantsSettings = Config.Settings ~= nil and Config.Settings ~= false
-	if (Window.ProfileConfig and typeof(Window.ProfileConfig) == "table") or wantsSettings then
+	-- `Window.Profile = {...}` builds the Combat / Visuals panel.
+	if Window.ProfileConfig and typeof(Window.ProfileConfig) == "table" then
 		task.defer(function()
 			if not Window.Destroyed and not Window.ProfilePanel then
 				Window:Profile(Window.ProfileConfig or {})
